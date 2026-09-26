@@ -1,0 +1,9 @@
+app:
+  name: interview-coaching-ai
+  environment: development
+models:
+  baseline: ./models/baseline
+  tabddpm: ./models/tabddpm
+  ctgan: ./models/ctgan
+fusion:
+  window_seconds: 5
