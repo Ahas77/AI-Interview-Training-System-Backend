@@ -5,8 +5,6 @@ FastAPI service for multimodal feature extraction, baseline analysis, question s
 Run locally:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+..\.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+..\.\.venv\Scripts\python.exe -m uvicorn main:app --reload --port 8000
 ```
