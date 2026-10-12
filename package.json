@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "seed:users": "node scripts/seedUsers.js",
+    "seed:c3": "node scripts/seedC3DemoData.js",
+    "seed:c3:delete": "node scripts/seedC3DemoData.js --delete",
+    "test": "node --test tests/*.test.js"
   },
   "keywords": [],
   "author": "",

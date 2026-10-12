@@ -225,7 +225,13 @@ const interviewController = {
       }
 
       // 1. Save user answer
-      await InterviewModel.saveAnswer(qaId, userAnswerText);
+      const saved = await InterviewModel.saveAnswer(qaId, sessionId, userAnswerText);
+      if (!saved) {
+        return res.status(404).json({
+          success: false,
+          message: "Question log not found for this session.",
+        });
+      }
 
       // 2. Check if all questions completed
       if (session.current_question_index >= session.total_questions) {

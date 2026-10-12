@@ -16,6 +16,25 @@ const pool = mysql.createPool({
   queueLimit: 0,
 });
 
+async function addColumnIfMissing(tableName, columnName, alterSql) {
+  try {
+    const dbName = process.env.DB_NAME || "interview_db";
+    const [rows] = await pool.query(
+      `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?
+       LIMIT 1`,
+      [dbName, tableName, columnName]
+    );
+
+    if (!rows || rows.length === 0) {
+      await pool.query(alterSql);
+    }
+  } catch (error) {
+    console.warn(`Migration warning for ${tableName}.${columnName}:`, error.message);
+  }
+}
+
 async function initDB() {
   try {
     // 1. Connect without database to ensure database exists
@@ -108,6 +127,8 @@ async function initDB() {
         target_company VARCHAR(100) DEFAULT NULL,
         job_role VARCHAR(100) NOT NULL,
         expertise_level VARCHAR(50) NOT NULL,
+        session_type VARCHAR(50) DEFAULT 'interview',
+        session_number INT DEFAULT NULL,
         status VARCHAR(50) DEFAULT 'in_progress',
         total_questions INT DEFAULT 5,
         current_question_index INT DEFAULT 1,
@@ -120,20 +141,173 @@ async function initDB() {
     `;
     await pool.query(createSessionsTableQuery);
 
+    await addColumnIfMissing(
+      "interview_sessions",
+      "session_type",
+      "ALTER TABLE interview_sessions ADD COLUMN session_type VARCHAR(50) DEFAULT 'interview';"
+    );
+    await addColumnIfMissing(
+      "interview_sessions",
+      "session_number",
+      "ALTER TABLE interview_sessions ADD COLUMN session_number INT DEFAULT NULL;"
+    );
+
     // 5. Create interview_qa_logs table if not exists
     const createQALogsTableQuery = `
       CREATE TABLE IF NOT EXISTS interview_qa_logs (
         id INT AUTO_INCREMENT PRIMARY KEY,
         session_id INT NOT NULL,
         question_number INT NOT NULL,
+        question_type VARCHAR(50) DEFAULT 'hr',
         question_text TEXT NOT NULL,
         user_answer_text TEXT DEFAULT NULL,
+        answered_at TIMESTAMP NULL,
+        answer_word_count INT DEFAULT NULL,
+        answer_score DECIMAL(10,2) DEFAULT NULL,
+        response_latency_sec DECIMAL(10,2) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_qa_session (session_id),
         CONSTRAINT fk_qa_session FOREIGN KEY (session_id) REFERENCES interview_sessions(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `;
     await pool.query(createQALogsTableQuery);
+
+    await addColumnIfMissing(
+      "interview_qa_logs",
+      "question_type",
+      "ALTER TABLE interview_qa_logs ADD COLUMN question_type VARCHAR(50) DEFAULT 'hr';"
+    );
+    await addColumnIfMissing(
+      "interview_qa_logs",
+      "answered_at",
+      "ALTER TABLE interview_qa_logs ADD COLUMN answered_at TIMESTAMP NULL;"
+    );
+    await addColumnIfMissing(
+      "interview_qa_logs",
+      "answer_word_count",
+      "ALTER TABLE interview_qa_logs ADD COLUMN answer_word_count INT DEFAULT NULL;"
+    );
+    await addColumnIfMissing(
+      "interview_qa_logs",
+      "answer_score",
+      "ALTER TABLE interview_qa_logs ADD COLUMN answer_score DECIMAL(10,2) DEFAULT NULL;"
+    );
+    await addColumnIfMissing(
+      "interview_qa_logs",
+      "response_latency_sec",
+      "ALTER TABLE interview_qa_logs ADD COLUMN response_latency_sec DECIMAL(10,2) DEFAULT NULL;"
+    );
+
+    // 6. C3 signal readings from face, voice, or text components
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS session_signals (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        session_id INT NOT NULL,
+        qa_id INT DEFAULT NULL,
+        t_sec DECIMAL(10,2) NOT NULL,
+        source VARCHAR(50) NOT NULL,
+        metrics JSON NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_signal_session (session_id),
+        INDEX idx_signal_qa (qa_id),
+        CONSTRAINT fk_signal_session FOREIGN KEY (session_id) REFERENCES interview_sessions(id) ON DELETE CASCADE,
+        CONSTRAINT fk_signal_qa FOREIGN KEY (qa_id) REFERENCES interview_qa_logs(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 7. C3 user baseline versions
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_baselines (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        session_id INT DEFAULT NULL,
+        version INT NOT NULL,
+        metrics JSON NOT NULL,
+        confidence DECIMAL(5,4) DEFAULT 0,
+        source VARCHAR(50) DEFAULT 'warmup',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_baseline_user_version (user_id, version),
+        CONSTRAINT fk_baseline_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        CONSTRAINT fk_baseline_session FOREIGN KEY (session_id) REFERENCES interview_sessions(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await addColumnIfMissing(
+      "user_baselines",
+      "source",
+      "ALTER TABLE user_baselines ADD COLUMN source VARCHAR(50) DEFAULT 'warmup';"
+    );
+
+    // 8. C3 explainable coaching tips and outcomes
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS coaching_tips (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        session_id INT NOT NULL,
+        qa_id INT DEFAULT NULL,
+        question_type VARCHAR(50) DEFAULT NULL,
+        metric VARCHAR(100) NOT NULL,
+        before_value DECIMAL(10,4) DEFAULT NULL,
+        goal_text TEXT,
+        tip TEXT NOT NULL,
+        why TEXT,
+        practice TEXT,
+        approach_label VARCHAR(100) DEFAULT NULL,
+        followed VARCHAR(20) DEFAULT NULL,
+        after_value DECIMAL(10,4) DEFAULT NULL,
+        outcome_status VARCHAR(50) DEFAULT 'open',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        evaluated_at TIMESTAMP NULL,
+        INDEX idx_tip_user_session (user_id, session_id),
+        INDEX idx_tip_qa (qa_id),
+        CONSTRAINT fk_tip_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        CONSTRAINT fk_tip_session FOREIGN KEY (session_id) REFERENCES interview_sessions(id) ON DELETE CASCADE,
+        CONSTRAINT fk_tip_qa FOREIGN KEY (qa_id) REFERENCES interview_qa_logs(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await addColumnIfMissing(
+      "coaching_tips",
+      "approach_label",
+      "ALTER TABLE coaching_tips ADD COLUMN approach_label VARCHAR(100) DEFAULT NULL;"
+    );
+
+    // 9. C3 post-session self-ratings
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS self_ratings (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        session_id INT NOT NULL,
+        improvement_rating INT NOT NULL,
+        tip_clarity_rating INT DEFAULT NULL,
+        tip_usefulness_rating INT DEFAULT NULL,
+        comment TEXT DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_self_rating_user_session (user_id, session_id),
+        INDEX idx_self_rating_user (user_id),
+        CONSTRAINT fk_self_rating_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        CONSTRAINT fk_self_rating_session FOREIGN KEY (session_id) REFERENCES interview_sessions(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // 10. C3 baseline drift events
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS drift_events (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        metric VARCHAR(100) NOT NULL,
+        question_type VARCHAR(50) DEFAULT NULL,
+        z_score DECIMAL(10,4) NOT NULL,
+        direction VARCHAR(20) NOT NULL,
+        classification VARCHAR(50) NOT NULL,
+        detected_at_session_number INT DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_drift_event (user_id, metric, question_type, detected_at_session_number),
+        INDEX idx_drift_user (user_id),
+        CONSTRAINT fk_drift_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
 
     console.log("Database, users, cv_analysis, interview_sessions & interview_qa_logs tables initialized successfully.");
   } catch (error) {

@@ -6,6 +6,11 @@ const InterviewModel = {
    */
   async createSession(data) {
     const { userId, cvId, targetCompany, jobRole, expertiseLevel, totalQuestions = 5 } = data;
+    const [countRows] = await pool.query(
+      "SELECT COUNT(*) AS count FROM interview_sessions WHERE user_id = ? AND session_type <> 'warmup'",
+      [userId]
+    );
+    const sessionNumber = (countRows[0]?.count || 0) + 1;
 
     const query = `
       INSERT INTO interview_sessions (
@@ -14,10 +19,12 @@ const InterviewModel = {
         target_company,
         job_role,
         expertise_level,
+        session_type,
+        session_number,
         status,
         total_questions,
         current_question_index
-      ) VALUES (?, ?, ?, ?, ?, 'in_progress', ?, 1)
+      ) VALUES (?, ?, ?, ?, ?, 'interview', ?, 'in_progress', ?, 1)
     `;
 
     const [result] = await pool.query(query, [
@@ -26,6 +33,7 @@ const InterviewModel = {
       targetCompany || null,
       jobRole,
       expertiseLevel,
+      sessionNumber,
       totalQuestions,
     ]);
 
@@ -66,14 +74,24 @@ const InterviewModel = {
   /**
    * Save user's answer for a specific question log ID
    */
-  async saveAnswer(qaId, userAnswerText) {
+  async saveAnswer(qaId, sessionId, userAnswerText) {
+    const wordCount = String(userAnswerText || "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean).length;
+
     const query = `
       UPDATE interview_qa_logs
-      SET user_answer_text = ?
-      WHERE id = ?
+      SET
+        user_answer_text = ?,
+        answered_at = NOW(),
+        answer_word_count = ?,
+        response_latency_sec = TIMESTAMPDIFF(SECOND, created_at, NOW())
+      WHERE id = ? AND session_id = ?
     `;
 
-    await pool.query(query, [userAnswerText || "", qaId]);
+    const [result] = await pool.query(query, [userAnswerText || "", wordCount, qaId, sessionId]);
+    return result.affectedRows > 0;
   },
 
   /**
