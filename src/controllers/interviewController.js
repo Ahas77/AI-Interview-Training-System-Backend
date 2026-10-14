@@ -13,6 +13,11 @@ const interviewController = {
         return res.status(401).json({ success: false, message: "Unauthorized." });
       }
 
+
+
+
+
+
       const userId = req.user.id;
       const { cvId, company, jobRole, expertiseLevel, cvData } = req.body;
 
@@ -25,6 +30,9 @@ const interviewController = {
         cvRawText = cvData.raw_text || "";
         cvParsedData = cvData.parsed_data || cvData;
 
+
+
+        
         // If cvData has an id already, update its context
         if (cvData.id || validCvId) {
           validCvId = cvData.id || validCvId;

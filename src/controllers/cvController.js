@@ -24,6 +24,12 @@ const cvController = {
         });
       }
 
+
+
+
+// 1. Extract text from PDF / DOCX (with OCR fallback if scanned)
+
+
       const userId = req.user.id;
       const file = req.file;
       const filePath = file.path;
@@ -63,6 +69,9 @@ const cvController = {
         });
       }
 
+
+
+
       // 3. Extract key top-level metadata for MySQL columns
       const candidateName = parsedData.candidate?.full_name || null;
       const email = parsedData.candidate?.email || null;
@@ -73,6 +82,8 @@ const cvController = {
         parsedData.suggested_job_roles && parsedData.suggested_job_roles.length > 0
           ? parsedData.suggested_job_roles[0]
           : null;
+
+
       const suggestedLevel = parsedData.expertise_level || null;
 
       // Save CV Analysis record directly into cv_analysis table in MySQL
@@ -96,6 +107,8 @@ const cvController = {
           targetExpertiseLevel: suggestedLevel,
           status: "uploaded",
         });
+
+         // Save CV analysis configuration
       } catch (dbErr) {
         console.error("Error saving CV analysis record to DB on upload:", dbErr);
       }
@@ -135,10 +148,14 @@ const cvController = {
         message: "An internal server error occurred while processing the CV.",
       });
     }
+
+
   },
 
   /**
    * GET /api/cv/latest
+   * 
+   * 
    * Returns authenticated user's latest CV analysis
    */
   async getLatestCV(req, res) {
@@ -159,8 +176,17 @@ const cvController = {
       }
 
       return res.status(200).json({
+
+
         success: true,
         data: cvRecord,
+
+  /**
+   * GET /api/cv/:id
+   * Returns specific CV analysis by ID for authenticated user
+   */
+
+
       });
     } catch (error) {
       console.error("getLatestCV Error:", error);
@@ -238,12 +264,16 @@ const cvController = {
 
       let savedRecord = null;
 
+
+
       // If full cvData object is passed from fresh upload, insert new complete record into DB
       if (cvData) {
         const fileName = cvData.file_name || "Uploaded_CV.pdf";
         const filePath = cvData.file_path || fileName;
         const rawText = cvData.raw_text || "";
         const parsedData = cvData.parsed_data || cvData || {};
+
+        
         const candidateName = parsedData.candidate?.full_name || cvData.candidate_name || null;
         const email = parsedData.candidate?.email || cvData.email || null;
         const phone = parsedData.candidate?.phone || cvData.phone || null;
