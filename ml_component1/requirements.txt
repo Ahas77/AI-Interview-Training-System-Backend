@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+numpy
+pandas
+librosa
+soundfile
+opencv-python
+mediapipe
+datasets
+scikit-learn

@@ -7,3 +7,13 @@ dist/
 .idea/
 .vscode/
 *.log
+
+# Component 1 Python environment, downloaded data and generated models
+ml_component1/.venv/
+ml_component1/__pycache__/
+ml_component1/**/__pycache__/
+ml_component1/data/raw/
+ml_component1/data/processed/
+ml_component1/models/*.joblib
+ml_component1/models/*.pkl
+ml_component1/models/*.onnx

@@ -5,6 +5,7 @@ const { initDB } = require("./src/config/db");
 const authRoutes = require("./src/routes/authRoutes");
 const cvRoutes = require("./src/routes/cvRoutes");
 const interviewRoutes = require("./src/routes/interviewRoutes");
+const behavioralAnalysisRoutes = require("./src/routes/behavioralAnalysisRoutes");
 
 const app = express();
 const port = process.env.PORT || 8000;
@@ -18,6 +19,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api", authRoutes);
 app.use("/api/cv", cvRoutes);
 app.use("/api/interview", interviewRoutes);
+app.use("/api/behavioral-analysis", behavioralAnalysisRoutes);
 
 app.get("/", (req, res) => {
   res.json({

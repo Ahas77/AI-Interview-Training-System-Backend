@@ -135,7 +135,25 @@ async function initDB() {
     `;
     await pool.query(createQALogsTableQuery);
 
-    console.log("Database, users, cv_analysis, interview_sessions & interview_qa_logs tables initialized successfully.");
+    // 6. Component 1: personalized vocal and facial behavioral analysis
+    const createBehavioralAnalysisTableQuery = `
+      CREATE TABLE IF NOT EXISTS behavioral_analysis_sessions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        status VARCHAR(50) DEFAULT 'collecting_baseline',
+        baseline_samples JSON NOT NULL,
+        baseline_duration_seconds DECIMAL(6,2) DEFAULT NULL,
+        interview_samples JSON DEFAULT NULL,
+        result JSON DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_behavioral_user (user_id),
+        CONSTRAINT fk_behavioral_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `;
+    await pool.query(createBehavioralAnalysisTableQuery);
+
+    console.log("Database, users, cv_analysis, interview_sessions, interview_qa_logs & behavioral analysis tables initialized successfully.");
   } catch (error) {
     console.error("Database initialization error:", error.message);
   }
