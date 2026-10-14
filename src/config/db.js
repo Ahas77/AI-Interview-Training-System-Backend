@@ -135,6 +135,9 @@ async function initDB() {
     `;
     await pool.query(createQALogsTableQuery);
 
+
+
+    
     console.log("Database, users, cv_analysis, interview_sessions & interview_qa_logs tables initialized successfully.");
   } catch (error) {
     console.error("Database initialization error:", error.message);

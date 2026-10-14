@@ -8,7 +8,12 @@ router.post("/login", authController.login);
 router.post("/logout", authController.logout);
 router.get("/me", verifyToken, authController.getProfile);
 router.get("/profile", verifyToken, authController.getProfile);
+
+
+
 router.post("/update_profile", verifyToken, authController.updateProfile);
+
+
 router.post("/profile-reset-password", verifyToken, authController.profileResetPassword);
 
 module.exports = router;
