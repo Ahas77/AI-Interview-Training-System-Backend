@@ -198,6 +198,9 @@ async function initDB() {
       "ALTER TABLE interview_qa_logs ADD COLUMN response_latency_sec DECIMAL(10,2) DEFAULT NULL;"
     );
 
+    await addColumnIfMissing("interview_qa_logs", "answer_feedback",
+      "ALTER TABLE interview_qa_logs ADD COLUMN answer_feedback TEXT DEFAULT NULL;");
+
     // 6. C3 signal readings from face, voice, or text components
     await pool.query(`
       CREATE TABLE IF NOT EXISTS session_signals (
@@ -271,6 +274,9 @@ async function initDB() {
       "approach_label",
       "ALTER TABLE coaching_tips ADD COLUMN approach_label VARCHAR(100) DEFAULT NULL;"
     );
+
+    await addColumnIfMissing("coaching_tips", "baseline_version",
+      "ALTER TABLE coaching_tips ADD COLUMN baseline_version INT DEFAULT NULL;");
 
     // 9. C3 post-session self-ratings
     await pool.query(`

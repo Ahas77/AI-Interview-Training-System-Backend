@@ -1,4 +1,5 @@
 const { pool } = require("../config/db");
+const { classifyQuestion } = require("../services/c3AiService");
 
 const InterviewModel = {
   /**
@@ -63,11 +64,12 @@ const InterviewModel = {
       INSERT INTO interview_qa_logs (
         session_id,
         question_number,
-        question_text
-      ) VALUES (?, ?, ?)
+        question_text,
+        question_type
+      ) VALUES (?, ?, ?, ?)
     `;
 
-    const [result] = await pool.query(query, [sessionId, questionNumber, questionText]);
+    const [result] = await pool.query(query, [sessionId, questionNumber, questionText, classifyQuestion(questionText)]);
     return result.insertId;
   },
 
@@ -107,6 +109,11 @@ const InterviewModel = {
 
     const [rows] = await pool.query(query, [sessionId]);
     return rows;
+  },
+
+  async saveEvaluation(qaId, sessionId, evaluation) {
+    await pool.query(`UPDATE interview_qa_logs SET question_type = ?, answer_score = ?, answer_feedback = ? WHERE id = ? AND session_id = ?`,
+      [evaluation.questionType, evaluation.score, evaluation.feedback, qaId, sessionId]);
   },
 
   /**

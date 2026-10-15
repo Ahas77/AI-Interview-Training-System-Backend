@@ -40,10 +40,11 @@ async function buildBaselineForSession(userId, sessionId) {
   if (session) {
     signals = await C3Model.getSignalsForSession(session.id);
   } else {
-    const sessions = (await C3Model.getInterviewSessionsForUser(userId)).slice(0, 2);
+    if (sessionId) return { status: "insufficient data", message: "Session not found or access denied." };
+    const sessions = (await C3Model.getInterviewSessionsForUser(userId)).slice(-2);
     if (!sessions.length) return { status: "insufficient data", message: "No warm-up or interview signals available." };
     signals = await C3Model.getSignalsForSessions(sessions.map((item) => item.id));
-    source = "first_sessions";
+    source = "recent_sessions";
     session = null;
   }
 
@@ -52,9 +53,12 @@ async function buildBaselineForSession(userId, sessionId) {
   }
 
   const baseline = buildBaselineMetrics(signals);
+  baseline.metrics = Object.fromEntries(Object.entries(baseline.metrics)
+    .filter(([, data]) => data.n >= config.MIN_SIGNAL_READINGS_PER_METRIC));
   if (!Object.keys(baseline.metrics).length) {
-    return { status: "insufficient data", message: "No numeric metrics found for baseline." };
+    return { status: "insufficient data", message: "Record at least 3 valid readings per delivery indicator. Text length alone cannot create a delivery baseline." };
   }
+  baseline.confidence = round(Math.min(1, Math.min(...Object.values(baseline.metrics).map((metric) => metric.n)) / config.BASELINE_CONFIDENCE_TARGET_READINGS));
 
   const saved = await C3Model.saveBaseline({
     userId,
@@ -69,7 +73,6 @@ async function buildBaselineForSession(userId, sessionId) {
 
 async function progressOverview(userId) {
   const baseline = await C3Model.getLatestBaseline(userId);
-  if (!baseline) return { status: "insufficient data", message: "No active baseline found." };
   const all = await getAllSessionSummaries(userId);
   if (!all.length) return { status: "insufficient data", message: "No interview sessions found." };
 
@@ -120,8 +123,8 @@ async function perTypeAnalysis(userId) {
     };
   });
 
-  const readyTypes = analysis.filter((item) => item.average_delivery_deviation != null);
-  const weakest = readyTypes.sort((a, b) => b.average_delivery_deviation - a.average_delivery_deviation)[0] || null;
+  const readyTypes = analysis.filter((item) => item.status === "ready" && item.average_score != null);
+  const weakest = readyTypes.sort((a, b) => a.average_score - b.average_score)[0] || null;
   return { status: "ready", overall, weakest_type: weakest?.question_type || null, analysis };
 }
 
@@ -129,8 +132,10 @@ async function progressComparison(userId) {
   const all = await getAllSessionSummaries(userId);
   if (all.length < 2) return { status: "insufficient data", message: "At least 2 interview sessions are required." };
 
-  const first = all.slice(0, Math.min(2, all.length));
-  const latest = all.slice(-Math.min(2, all.length));
+  // Disjoint windows prevent two sessions from being compared with themselves.
+  const windowSize = Math.min(2, Math.floor(all.length / 2));
+  const first = all.slice(0, windowSize);
+  const latest = all.slice(-windowSize);
   const firstAgg = averageQuestionSummaries(first.flatMap((item) => item.summaries));
   const latestAgg = averageQuestionSummaries(latest.flatMap((item) => item.summaries));
   const metricNames = new Set([
@@ -139,10 +144,15 @@ async function progressComparison(userId) {
   ]);
   let closerCount = 0;
   let comparableCount = 0;
+  const baselineMetrics = all[0].baseline?.metrics || {};
 
   metricNames.forEach((metric) => {
-    const before = Math.abs(firstAgg.average_metrics[metric] || 0);
-    const after = Math.abs(latestAgg.average_metrics[metric] || 0);
+    const center = baselineMetrics[metric]?.mean;
+    const beforeValue = firstAgg.average_metrics[metric];
+    const afterValue = latestAgg.average_metrics[metric];
+    if (center == null || beforeValue == null || afterValue == null) return;
+    const before = Math.abs(beforeValue - center);
+    const after = Math.abs(afterValue - center);
     comparableCount++;
     if (after <= before) closerCount++;
   });
@@ -176,23 +186,20 @@ async function detectDrift(userId) {
     return { status: "insufficient data", message: `At least ${config.MIN_DRIFT_SESSIONS} sessions are required before drift detection.` };
   }
 
-  const reference = all.slice(0, config.REFERENCE_DRIFT_SESSION_COUNT);
+  const reference = all.slice(0, Math.min(config.REFERENCE_DRIFT_SESSION_COUNT, all.length - config.RECENT_DRIFT_SESSION_COUNT));
   const recent = all.slice(-config.RECENT_DRIFT_SESSION_COUNT);
   const refAgg = averageQuestionSummaries(reference.flatMap((item) => item.summaries));
   const recentAgg = averageQuestionSummaries(recent.flatMap((item) => item.summaries));
   const metrics = Object.keys(recentAgg.average_metrics || {});
   const scoreAvailable = refAgg.average_answer_score != null && recentAgg.average_answer_score != null;
   const scoreChange = scoreAvailable ? recentAgg.average_answer_score - refAgg.average_answer_score : null;
-  const deviationChange =
-    refAgg.average_delivery_deviation == null || recentAgg.average_delivery_deviation == null
-      ? null
-      : recentAgg.average_delivery_deviation - refAgg.average_delivery_deviation;
 
   const events = [];
   metrics.forEach((metric) => {
     const refValues = reference.map((item) => item.aggregate.average_metrics[metric]).filter((x) => x != null);
     const recentValue = recentAgg.average_metrics[metric];
-    if (!refValues.length || recentValue == null) return;
+    const recentValues = recent.map((item) => item.aggregate.average_metrics[metric]);
+    if (refValues.length < 2 || recentValues.some((value) => value == null) || recentValue == null) return;
     const refMean = mean(refValues);
     const refStd = Math.max(
       Math.sqrt(refValues.reduce((sum, value) => sum + Math.pow(value - refMean, 2), 0) / refValues.length),
@@ -200,13 +207,18 @@ async function detectDrift(userId) {
     );
     const z = round((recentValue - refMean) / refStd);
     if (Math.abs(z) < config.DRIFT_Z_THRESHOLD) return;
+    // Both recent sessions must cross the threshold in the same direction.
+    if (!recentValues.every((value) => Math.sign(value - refMean) === Math.sign(z) &&
+      Math.abs((value - refMean) / refStd) >= config.DRIFT_Z_THRESHOLD)) return;
+    const baseline = all[0].baseline?.metrics?.[metric];
+    const deviationChange = baseline ? Math.abs(recentValue - baseline.mean) - Math.abs(refMean - baseline.mean) : null;
     const event = {
       user_id: userId,
       metric,
       question_type: null,
       z_score: z,
       direction: z >= 0 ? "up" : "down",
-      classification: classifyDrift({ deviationChange, scoreChange, scoreAvailable }),
+      classification: deviationChange == null ? "behaviour_shift" : classifyDrift({ deviationChange, scoreChange, scoreAvailable }),
       detected_at_session_number: recent[recent.length - 1].session.session_number,
     };
     event.explanation = driftExplanation(event, scoreAvailable);
@@ -224,12 +236,12 @@ async function detectDrift(userId) {
 async function generateCoaching(userId, sessionId) {
   const summary = await getSessionSummary(sessionId, userId);
   if (!summary) return null;
-  const all = await getAllSessionSummaries(userId);
-  const drift = await detectDrift(userId).catch(() => ({ events: [] }));
+  const all = (await getAllSessionSummaries(userId)).filter((item) =>
+    Number(item.session.session_number) <= Number(summary.session.session_number));
   const findings = buildFindings({
     summaries: summary.summaries,
     allSessionSummaries: all.map((item) => item.summaries),
-    driftEvents: drift.events || [],
+    driftEvents: [],
   });
 
   if (!findings.length) {
@@ -237,6 +249,8 @@ async function generateCoaching(userId, sessionId) {
   }
 
   const existingTips = await C3Model.getTipsForUser(userId);
+  const savedTips = existingTips.filter((tip) => Number(tip.session_id) === Number(sessionId));
+  if (savedTips.length) return { status: "ready", tips: savedTips };
   const tips = [];
   for (const finding of findings) {
     const failedFollowed = existingTips.find(
@@ -253,15 +267,17 @@ async function generateCoaching(userId, sessionId) {
       qa_id: finding.qa_id,
       question_type: finding.question_type,
       metric: finding.metric,
-      before_value: finding.before_value,
-      goal_text: `Move ${finding.metric} closer to your personal baseline.`,
+      before_value: finding.metric === "answer_score" ? finding.before_value : Math.abs(finding.deviation),
+      goal_text: finding.metric === "answer_score" ? "Improve answer content using the same rubric." : `Reduce distance of ${finding.metric} from your personal baseline.`,
       tip: text.tip,
-      why: text.why,
+      why: finding.evidence,
       practice: text.practice,
       approach_label: text.approach_label,
       evidence: finding.evidence,
+      baseline_version: summary.baseline?.version || null,
     };
     tip.id = await C3Model.insertCoachingTip(tip);
+    tip.outcome_status = "open";
     tips.push(tip);
   }
 
@@ -274,19 +290,24 @@ async function evaluateOpenTips(userId) {
   const results = [];
 
   for (const tip of tips) {
+    const origin = all.find((item) => Number(item.session.id) === Number(tip.session_id));
+    if (!origin) continue;
+    if (tip.metric !== "answer_score" && (!tip.baseline_version || Number(tip.baseline_version) !== Number(origin.baseline?.version))) continue;
     const later = all
-      .filter((item) => Number(item.session.session_number || 0) > Number((tip.session_number || 0)))
+      .filter((item) => Number(item.session.session_number) > Number(origin.session.session_number))
       .slice(0, 2);
-    const source = later.length ? later : all.filter((item) => item.session.id !== tip.session_id).slice(-2);
-    const matching = source.flatMap((item) =>
+    const matching = later.flatMap((item) =>
       item.summaries.filter((summary) => !tip.question_type || summary.question_type === tip.question_type)
     );
     const values = matching
-      .map((summary) => summary.metrics?.[tip.metric]?.mean)
+      .map((summary) => tip.metric === "answer_score" ? summary.answer_score :
+        tip.metric === "delivery_deviation" ? summary.delivery_deviation :
+          summary.metrics?.[tip.metric]?.deviation == null ? null : Math.abs(summary.metrics[tip.metric].deviation))
       .filter((value) => value != null);
     if (!values.length) continue;
     const afterValue = round(mean(values));
-    const outcomeStatus = evaluateOutcome(Number(tip.before_value), afterValue);
+    const outcomeStatus = tip.metric === "answer_score" ? evaluateOutcome(afterValue, Number(tip.before_value)) :
+      evaluateOutcome(Number(tip.before_value), afterValue);
     await C3Model.updateTipOutcome({ tipId: tip.id, userId, afterValue, outcomeStatus });
     results.push({ tip_id: tip.id, after_value: afterValue, outcome_status: outcomeStatus });
   }
@@ -299,18 +320,18 @@ async function evaluationRows(includeDemo = false) {
   const rows = [];
   for (const userId of userIds) {
     const all = await getAllSessionSummaries(userId);
-    const comparison = await progressComparison(userId).catch(() => null);
     const ratings = await C3Model.getSelfRatings(userId);
     const tips = await C3Model.getTipsForUser(userId);
-    all.forEach((item) => {
+    all.forEach((item, index) => {
+      const first = all[0].aggregate;
       const rating = ratings.find((r) => Number(r.session_id) === Number(item.session.id));
       const sessionTips = tips.filter((tip) => Number(tip.session_id) === Number(item.session.id));
       rows.push({
         user_id: userId,
         session_id: item.session.id,
         session_number: item.session.session_number,
-        fixed_threshold_progress: comparison?.fixed_threshold_progress?.raw_average_answer_score_change ?? null,
-        baseline_relative_progress: comparison?.baseline_relative_progress?.delivery_deviation_change ?? null,
+        fixed_threshold_progress: index === 0 || first.average_answer_score == null || item.aggregate.average_answer_score == null ? null : round(item.aggregate.average_answer_score - first.average_answer_score),
+        baseline_relative_progress: index === 0 || first.average_delivery_deviation == null || item.aggregate.average_delivery_deviation == null ? null : round(first.average_delivery_deviation - item.aggregate.average_delivery_deviation),
         delivery_deviation: item.aggregate.average_delivery_deviation,
         average_score: item.aggregate.average_answer_score,
         self_rated_improvement: rating?.improvement_rating ?? null,
@@ -324,7 +345,12 @@ async function evaluationRows(includeDemo = false) {
 }
 
 async function correlationSummary(includeDemo = false) {
-  const rows = (await evaluationRows(includeDemo)).filter((row) => row.self_rated_improvement != null);
+  // One latest rated observation per participant avoids counting repeated sessions as independent people.
+  const latestByUser = new Map();
+  for (const row of await evaluationRows(includeDemo)) {
+    if (row.self_rated_improvement != null && (row.fixed_threshold_progress != null || row.baseline_relative_progress != null)) latestByUser.set(row.user_id, row);
+  }
+  const rows = [...latestByUser.values()];
   const participantCount = new Set(rows.map((row) => row.user_id)).size;
   if (participantCount < 5) {
     return { status: "insufficient data", message: "At least 5 participants are required.", participant_count: participantCount };
@@ -333,10 +359,10 @@ async function correlationSummary(includeDemo = false) {
     status: "ready",
     participant_count: participantCount,
     fixed_threshold_spearman: spearmanCorrelation(
-      rows.map((row) => ({ x: Number(row.fixed_threshold_progress), y: Number(row.self_rated_improvement) }))
+      rows.filter((row) => row.fixed_threshold_progress != null).map((row) => ({ x: Number(row.fixed_threshold_progress), y: Number(row.self_rated_improvement) }))
     ),
     baseline_relative_spearman: spearmanCorrelation(
-      rows.map((row) => ({ x: Number(row.baseline_relative_progress), y: Number(row.self_rated_improvement) }))
+      rows.filter((row) => row.baseline_relative_progress != null).map((row) => ({ x: Number(row.baseline_relative_progress), y: Number(row.self_rated_improvement) }))
     ),
   };
 }

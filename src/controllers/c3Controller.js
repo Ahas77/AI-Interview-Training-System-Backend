@@ -1,6 +1,7 @@
 const C3Model = require("../models/c3Model");
 const config = require("../config/c3Config");
 const C3ProgressService = require("../services/c3ProgressService");
+const frameRequests = new Set();
 
 function isPlainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value);
@@ -8,7 +9,7 @@ function isPlainObject(value) {
 
 function validateMetrics(metrics) {
   if (!isPlainObject(metrics)) return false;
-  return Object.values(metrics).every((value) => Number.isFinite(Number(value)));
+  return Object.keys(metrics).length > 0 && Object.values(metrics).every((value) => typeof value === "number" && Number.isFinite(value));
 }
 
 function toCsv(rows) {
@@ -22,6 +23,50 @@ function toCsv(rows) {
 }
 
 const c3Controller = {
+  async analyzeAnswers(req, res) {
+    try {
+      const session = await C3Model.getSessionForUser(req.params.sessionId, req.user.id);
+      if (!session) return res.status(404).json({ success: false, message: "Session not found or access denied." });
+      if (session.status !== "completed") return res.status(422).json({ success: false, message: "Complete the interview before analysing saved answers." });
+      if (!process.env.XAI_API_KEY) return res.status(503).json({ success: false, message: "Configure backend XAI_API_KEY first." });
+      const { evaluateAnswer } = require("../services/c3AiService");
+      const InterviewModel = require("../models/interviewModel");
+      let analyzed = 0;
+      for (const qa of await C3Model.getQALogsForSession(session.id)) {
+        if (!qa.user_answer_text || qa.answer_score != null) continue;
+        await InterviewModel.saveEvaluation(qa.id, session.id, await evaluateAnswer(qa.question_text, qa.user_answer_text));
+        analyzed++;
+      }
+      return res.json({ success: true, data: { analyzed }, message: `${analyzed} answers analysed.` });
+    } catch (_error) {
+      return res.status(503).json({ success: false, message: "Grok answer analysis unavailable. Saved scores are retained; retry to analyse remaining answers." });
+    }
+  },
+  async analyzeFrame(req, res) {
+    const { sessionId, qaId, image, t_sec, consent } = req.body;
+    if (consent !== true) return res.status(422).json({ success: false, message: "Camera analysis consent is required." });
+    if (typeof t_sec !== "number" || !Number.isFinite(t_sec) || t_sec < 0 ||
+      typeof image !== "string" || image.length > 350000 || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(image)) {
+      return res.status(422).json({ success: false, message: "A JPEG frame under 250 KB and valid timestamp are required." });
+    }
+    if (frameRequests.has(req.user.id)) return res.status(429).json({ success: false, message: "Wait before sending another camera frame." });
+    frameRequests.add(req.user.id);
+    const release = setTimeout(() => frameRequests.delete(req.user.id), 12000);
+    release.unref();
+    try {
+      const session = await C3Model.getSessionForUser(sessionId, req.user.id);
+      if (!session) return res.status(404).json({ success: false, message: "Session not found or access denied." });
+      if (qaId) {
+        const questions = await C3Model.getQALogsForSession(sessionId);
+        if (!questions.some((q) => Number(q.id) === Number(qaId))) return res.status(404).json({ success: false, message: "Question not found for this session." });
+      }
+      const metrics = await require("../services/c3AiService").analyzeFrame(image);
+      if (metrics) await C3Model.insertSignals(sessionId, qaId || null, [{ t_sec, source: "face", metrics }]);
+      return res.json({ success: true, data: { status: metrics ? "recorded" : "no visible face", metrics } });
+    } catch (_error) {
+      return res.status(503).json({ success: false, message: "Grok camera analysis unavailable. Check backend XAI_API_KEY, model access and API quota." });
+    }
+  },
   async ingestSignals(req, res) {
     try {
       const userId = req.user.id;
@@ -46,7 +91,7 @@ const c3Controller = {
 
       const cleaned = [];
       for (const reading of readings) {
-        if (!Number.isFinite(Number(reading.t_sec))) {
+        if (typeof reading?.t_sec !== "number" || !Number.isFinite(reading.t_sec) || reading.t_sec < 0) {
           return res.status(422).json({ success: false, message: "Every reading requires numeric t_sec." });
         }
         if (!["face", "voice", "text"].includes(reading.source)) {
@@ -168,6 +213,9 @@ const c3Controller = {
 
   async refreshBaseline(req, res) {
     try {
+      if (req.body.sessionId && !await C3Model.getSessionForUser(req.body.sessionId, req.user.id)) {
+        return res.status(404).json({ success: false, message: "Session not found or access denied." });
+      }
       const result = await C3ProgressService.buildBaselineForSession(req.user.id, req.body.sessionId || null);
       return res.status(result.status === "ready" ? 201 : 422).json({
         success: result.status === "ready",

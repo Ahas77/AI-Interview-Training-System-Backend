@@ -1,6 +1,7 @@
 const InterviewModel = require("../models/interviewModel");
 const HRAiAgentService = require("../services/hrAiAgentService");
 const CVModel = require("../models/cvModel");
+const { evaluateAnswer } = require("../services/c3AiService");
 
 const interviewController = {
   /**
@@ -231,6 +232,18 @@ const interviewController = {
           success: false,
           message: "Question log not found for this session.",
         });
+      }
+
+      // AI availability must never prevent an interview answer from being saved.
+      if (process.env.XAI_API_KEY) {
+        try {
+          const logs = await InterviewModel.getQALogs(sessionId);
+          const question = logs.find((log) => Number(log.id) === Number(qaId));
+          const evaluation = await evaluateAnswer(question.question_text, userAnswerText);
+          await InterviewModel.saveEvaluation(qaId, sessionId, evaluation);
+        } catch (_error) {
+          console.warn("C3 answer evaluation unavailable; saved answer remains unscored.");
+        }
       }
 
       // 2. Check if all questions completed

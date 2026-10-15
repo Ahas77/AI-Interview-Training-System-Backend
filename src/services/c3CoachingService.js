@@ -1,4 +1,4 @@
-const AIProvider = require("./ai/aiProvider");
+const { generateJSON } = require("./c3AiService");
 const config = require("../config/c3Config");
 const {
   mean,
@@ -12,6 +12,13 @@ function buildFindings({ summaries, allSessionSummaries = [], driftEvents = [] }
   const byType = {};
 
   summaries.forEach((summary) => {
+    if (summary.answer_score != null && summary.answer_score < 70 && summary.answer_feedback) {
+      findings.push({ metric: "answer_score", question_type: summary.question_type,
+        qa_id: summary.qa_id, before_value: summary.answer_score, baseline_value: null,
+        deviation: 0, severity: (100 - summary.answer_score) / 10,
+        evidence: `Question ${summary.question_number} (${summary.question_type}) scored ${summary.answer_score}/100 on relevance, correctness, evidence and clarity. Feedback: ${summary.answer_feedback}`,
+        rule: "answer_content_rubric", feedback: summary.answer_feedback });
+    }
     Object.entries(summary.metrics || {}).forEach(([metric, data]) => {
       if (data.deviation == null || data.status !== "ok") return;
       const severity = Math.abs(data.deviation);
@@ -66,7 +73,7 @@ function buildFindings({ summaries, allSessionSummaries = [], driftEvents = [] }
       qa_id: null,
       before_value: latest.average_delivery_deviation,
       baseline_value: previous.average_delivery_deviation,
-      deviation: round(latest.average_delivery_deviation - previous.average_delivery_deviation),
+      deviation: latest.average_delivery_deviation,
       severity: 0.5,
       evidence: `Delivery deviation improved from ${previous.average_delivery_deviation} to ${latest.average_delivery_deviation} compared with the previous session.`,
       rule: "improvement_worth_congratulating",
@@ -91,12 +98,17 @@ function buildFindings({ summaries, allSessionSummaries = [], driftEvents = [] }
 }
 
 function fallbackTip(finding, shorter = false) {
-  const exerciseLength = shorter ? "5 minutes" : "10 minutes";
+  const exerciseLength = shorter ? "2 minutes" : "5 minutes";
   const metricLabel = String(finding.metric || "delivery").replace(/_/g, " ");
   return {
-    tip: `Practice one focused answer while monitoring your ${metricLabel}. Keep the delivery steady and close to your normal baseline.`,
+    tip: finding.metric === "answer_score" ? finding.feedback :
+      finding.metric === "gaze_off" ? "Place your interview notes close to the camera and practise returning your gaze to it between thoughts." :
+        finding.metric === "head_turn" ? "Place the camera at eye level and practise answering while facing it comfortably." :
+          `Practice one focused answer while monitoring your ${metricLabel}. Keep the delivery steady and close to your normal baseline.`,
     why: finding.evidence,
-    practice: `For ${exerciseLength}, answer one common interview question, pause once before speaking, and replay your answer to check whether your delivery stayed consistent.`,
+    practice: finding.metric === "answer_score" ?
+      `For ${exerciseLength}, rewrite this answer with a direct opening, one concrete example and a clear result. Check it against the feedback, then answer again without reading.` :
+      `For ${exerciseLength}, answer one common interview question, pause once before speaking, and replay your answer to check whether your delivery stayed consistent.`,
     approach_label: shorter ? "short_reflection" : "steady_delivery_rehearsal",
   };
 }
@@ -116,19 +128,17 @@ Return strict JSON: {"tip":"...","why":"...","practice":"...","approach_label":"
   });
 
   try {
-    const response = await AIProvider.generateJSON(systemPrompt, userPrompt);
-    const cleaned = String(response || "").replace(/```json/g, "").replace(/```/g, "").trim();
-    const parsed = JSON.parse(cleaned);
-    if (parsed.tip && parsed.why && parsed.practice) {
+    const parsed = await generateJSON(systemPrompt, { finding, instruction: userPrompt });
+    if ([parsed.tip, parsed.why, parsed.practice].every((value) => typeof value === "string" && value.trim())) {
       return {
         tip: String(parsed.tip),
-        why: String(parsed.why),
+        why: finding.evidence,
         practice: String(parsed.practice),
         approach_label: String(parsed.approach_label || "llm_coaching"),
       };
     }
   } catch (error) {
-    console.warn("C3 coaching LLM fallback used:", error.message);
+    console.warn("C3 coaching uses evidence-based local exercise because Grok is unavailable.");
   }
 
   return fallbackTip(finding, preferShorter);

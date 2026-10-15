@@ -4,6 +4,7 @@ const c3Controller = require("../controllers/c3Controller");
 const { verifyToken } = require("../middleware/authMiddleware");
 
 router.post("/signals", verifyToken, c3Controller.ingestSignals);
+router.post("/vision/frame", verifyToken, express.json({ limit: "400kb" }), c3Controller.analyzeFrame);
 router.post("/warmup", verifyToken, c3Controller.createWarmup);
 router.post("/baseline/build", verifyToken, c3Controller.buildBaseline);
 router.post("/baseline/refresh", verifyToken, c3Controller.refreshBaseline);
@@ -12,6 +13,7 @@ router.get("/progress/overview", verifyToken, c3Controller.overview);
 router.get("/progress/per-type", verifyToken, c3Controller.perType);
 router.get("/progress/comparison", verifyToken, c3Controller.comparison);
 router.get("/session/:sessionId", verifyToken, c3Controller.sessionDetail);
+router.post("/session/:sessionId/analyze", verifyToken, c3Controller.analyzeAnswers);
 
 router.get("/drift", verifyToken, c3Controller.drift);
 

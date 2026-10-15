@@ -91,7 +91,7 @@ const C3Model = {
   async getInterviewSessionsForUser(userId) {
     const [rows] = await pool.query(
       `SELECT * FROM interview_sessions
-       WHERE user_id = ? AND session_type <> 'warmup'
+       WHERE user_id = ? AND session_type <> 'warmup' AND status = 'completed'
        ORDER BY COALESCE(session_number, id) ASC, id ASC`,
       [userId]
     );
@@ -150,8 +150,8 @@ const C3Model = {
   async insertCoachingTip(tip) {
     const [result] = await pool.query(
       `INSERT INTO coaching_tips
-       (user_id, session_id, qa_id, question_type, metric, before_value, goal_text, tip, why, practice, approach_label)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (user_id, session_id, qa_id, question_type, metric, before_value, goal_text, tip, why, practice, approach_label, baseline_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         tip.user_id,
         tip.session_id,
@@ -164,6 +164,7 @@ const C3Model = {
         tip.why || null,
         tip.practice || null,
         tip.approach_label || null,
+        tip.baseline_version || null,
       ]
     );
     return result.insertId;
@@ -215,7 +216,7 @@ const C3Model = {
       [
         event.user_id,
         event.metric,
-        event.question_type || null,
+        event.question_type || "overall",
         event.z_score,
         event.direction,
         event.classification,

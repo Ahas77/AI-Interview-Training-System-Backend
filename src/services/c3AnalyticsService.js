@@ -36,7 +36,8 @@ function buildBaselineMetrics(signals) {
   for (const signal of signals) {
     const metrics = safeJson(signal.metrics, {});
     Object.entries(metrics || {}).forEach(([metric, value]) => {
-      const number = Number(value);
+      if (typeof value !== "number" || metric.startsWith("browser_")) return;
+      const number = value;
       if (!Number.isFinite(number)) return;
       if (!grouped[metric]) grouped[metric] = [];
       grouped[metric].push(number);
@@ -73,7 +74,8 @@ function summarizeMetricReadings(readings, baselineMetrics) {
   for (const reading of readings) {
     const metrics = safeJson(reading.metrics, {});
     Object.entries(metrics || {}).forEach(([metric, value]) => {
-      const number = Number(value);
+      if (typeof value !== "number" || metric.startsWith("browser_")) return;
+      const number = value;
       if (!Number.isFinite(number)) return;
       if (!grouped[metric]) grouped[metric] = [];
       grouped[metric].push({
@@ -149,6 +151,7 @@ function summarizeQuestions({ qaLogs, signals, baseline }) {
         question_type: qa.question_type || "hr",
         question_text: qa.question_text,
         answer_score: qa.answer_score == null ? null : Number(qa.answer_score),
+        answer_feedback: qa.answer_feedback || null,
         answer_word_count:
           qa.answer_word_count == null ? wordCount(qa.user_answer_text) : Number(qa.answer_word_count),
         response_latency_sec:
@@ -187,7 +190,7 @@ function averageQuestionSummaries(summaries) {
 
 function classifyDrift({ deviationChange, scoreChange, scoreAvailable }) {
   if (deviationChange == null) return "none";
-  if (deviationChange < 0 && (!scoreAvailable || scoreChange == null || scoreChange >= 0)) return "improvement";
+  if (deviationChange < 0 && scoreAvailable && scoreChange != null && scoreChange >= 0) return "improvement";
   if (deviationChange > 0 && scoreAvailable && scoreChange != null && scoreChange < 0) return "decline";
   if (Math.abs(deviationChange) > 0) return "behaviour_shift";
   return "none";

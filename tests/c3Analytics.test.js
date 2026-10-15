@@ -57,6 +57,7 @@ test("classifyDrift separates improvement, decline, and behaviour shift", () => 
   assert.equal(classifyDrift({ deviationChange: -0.2, scoreChange: 0, scoreAvailable: true }), "improvement");
   assert.equal(classifyDrift({ deviationChange: 0.2, scoreChange: -1, scoreAvailable: true }), "decline");
   assert.equal(classifyDrift({ deviationChange: 0.2, scoreChange: null, scoreAvailable: false }), "behaviour_shift");
+  assert.equal(classifyDrift({ deviationChange: -0.2, scoreChange: null, scoreAvailable: false }), "behaviour_shift");
 });
 
 test("buildFindings emits ranked findings for high deviations", () => {
