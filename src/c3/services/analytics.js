@@ -1,4 +1,4 @@
-const config = require("../config/c3Config");
+const config = require("../config/thresholds");
 
 function safeJson(value, fallback = null) {
   if (value == null) return fallback;
@@ -26,7 +26,7 @@ function wordCount(text) {
 }
 
 function round(value, digits = 4) {
-  if (value == null || Number.isNaN(Number(value))) return null;
+  if (value == null || !Number.isFinite(Number(value))) return null;
   return Number(Number(value).toFixed(digits));
 }
 
@@ -125,19 +125,20 @@ function summarizeQuestions({ qaLogs, signals, baseline }) {
   return qaLogs
     .filter((qa) => qa.user_answer_text != null || qa.answered_at)
     .map((qa) => {
-      const questionStartSec = Number(qa.question_start_sec || 0);
+      const questionStartSec = qa.question_start_sec == null ? null : Number(qa.question_start_sec);
       const questionEndSec =
         qa.answer_end_sec != null ? Number(qa.answer_end_sec) : Number.MAX_SAFE_INTEGER;
       const questionSignals = signals
         .filter((signal) => {
           if (signal.qa_id && Number(signal.qa_id) === Number(qa.id)) return true;
           if (signal.qa_id) return false;
+          if (questionStartSec == null || qa.answer_end_sec == null) return false;
           const tSec = Number(signal.t_sec);
           return tSec >= questionStartSec && tSec <= questionEndSec;
         })
         .map((signal) => ({
           ...signal,
-          question_relative_t_sec: Number(signal.t_sec) - questionStartSec,
+          question_relative_t_sec: questionStartSec == null ? null : Number(signal.t_sec) - questionStartSec,
         }));
 
       const metrics = summarizeMetricReadings(questionSignals, baselineMetrics);
@@ -157,7 +158,7 @@ function summarizeQuestions({ qaLogs, signals, baseline }) {
         response_latency_sec:
           qa.response_latency_sec == null ? null : Number(qa.response_latency_sec),
         metrics,
-        signal_status: questionSignals.length ? "available" : "insufficient signal",
+        signal_status: Object.values(metrics).some((metric) => metric.status !== "insufficient signal") ? "available" : "insufficient signal",
         delivery_deviation: deviations.length ? round(mean(deviations)) : null,
       };
     });

@@ -1,23 +1,23 @@
-const { generateJSON } = require("./c3AiService");
-const config = require("../config/c3Config");
+const { generateJSON } = require("./llm");
+const config = require("../config/thresholds");
 const {
   mean,
   round,
   averageQuestionSummaries,
   classifyDrift,
-} = require("./c3AnalyticsService");
+} = require("./analytics");
 
 function buildFindings({ summaries, allSessionSummaries = [], driftEvents = [] }) {
   const findings = [];
   const byType = {};
 
   summaries.forEach((summary) => {
-    if (summary.answer_score != null && summary.answer_score < 70 && summary.answer_feedback) {
+    if (summary.answer_score != null && summary.answer_score < config.LOW_ANSWER_SCORE) {
       findings.push({ metric: "answer_score", question_type: summary.question_type,
         qa_id: summary.qa_id, before_value: summary.answer_score, baseline_value: null,
         deviation: 0, severity: (100 - summary.answer_score) / 10,
-        evidence: `Question ${summary.question_number} (${summary.question_type}) scored ${summary.answer_score}/100 on relevance, correctness, evidence and clarity. Feedback: ${summary.answer_feedback}`,
-        rule: "answer_content_rubric", feedback: summary.answer_feedback });
+        evidence: `Question ${summary.question_number} (${summary.question_type}) has a recorded answer score of ${summary.answer_score}/100, below the coaching threshold ${config.LOW_ANSWER_SCORE}.`,
+        rule: "answer_content_rubric", feedback: "Give a direct answer, add one specific example, and explain the result." });
     }
     Object.entries(summary.metrics || {}).forEach(([metric, data]) => {
       if (data.deviation == null || data.status !== "ok") return;
@@ -81,23 +81,33 @@ function buildFindings({ summaries, allSessionSummaries = [], driftEvents = [] }
   }
 
   driftEvents.forEach((event) => {
+    const comparable = summaries.flatMap((summary) => {
+      const metric = summary.metrics?.[event.metric];
+      return metric?.status === "ok" && metric.deviation != null ? [metric] : [];
+    });
     findings.push({
       metric: event.metric,
       question_type: event.question_type || null,
       qa_id: null,
-      before_value: event.z_score,
-      baseline_value: 0,
-      deviation: event.z_score,
+      before_value: comparable.length ? mean(comparable.map((metric) => metric.mean)) : null,
+      baseline_value: comparable[0]?.baseline_mean ?? null,
+      deviation: comparable.length ? mean(comparable.map((metric) => Math.abs(metric.deviation))) : null,
       severity: Math.abs(event.z_score),
       evidence: `Recent ${event.metric} changed by z=${event.z_score}; classified as ${event.classification}.`,
       rule: "drift_event",
     });
   });
 
-  return findings.sort((a, b) => b.severity - a.severity).slice(0, 3);
+  // Keep the highest-priority finding per indicator/type, rather than repeating the same advice.
+  const unique = new Map();
+  for (const finding of findings.sort((a, b) => b.severity - a.severity)) {
+    const key = `${finding.metric}:${finding.question_type || "overall"}`;
+    if (!unique.has(key)) unique.set(key, finding);
+  }
+  return [...unique.values()].slice(0, config.MAX_FINDINGS);
 }
 
-function fallbackTip(finding, shorter = false) {
+function fallbackTip(finding, shorter = false, alternate = false) {
   const exerciseLength = shorter ? "2 minutes" : "5 minutes";
   const metricLabel = String(finding.metric || "delivery").replace(/_/g, " ");
   return {
@@ -109,11 +119,11 @@ function fallbackTip(finding, shorter = false) {
     practice: finding.metric === "answer_score" ?
       `For ${exerciseLength}, rewrite this answer with a direct opening, one concrete example and a clear result. Check it against the feedback, then answer again without reading.` :
       `For ${exerciseLength}, answer one common interview question, pause once before speaking, and replay your answer to check whether your delivery stayed consistent.`,
-    approach_label: shorter ? "short_reflection" : "steady_delivery_rehearsal",
+    approach_label: alternate ? "outline_then_rehearse" : shorter ? "short_reflection" : "steady_delivery_rehearsal",
   };
 }
 
-async function generateTipText(finding, preferShorter = false) {
+async function generateTipText(finding, preferShorter = false, alternate = false) {
   const systemPrompt = `
 You are an interview coach. Use only the facts provided.
 Do not invent causes, numbers, diagnoses, stress labels, or true emotion labels.
@@ -122,7 +132,7 @@ Return strict JSON: {"tip":"...","why":"...","practice":"...","approach_label":"
 `;
   const userPrompt = JSON.stringify({
     finding,
-    instruction: preferShorter
+    instruction: alternate ? "A previous exercise was tried but did not help. Use a different approach: outline three points, rehearse, and compare with the evidence." : preferShorter
       ? "The candidate did not follow a previous tip. Suggest a shorter exercise."
       : "Give one concrete coaching tip with a short practice exercise.",
   });
@@ -131,17 +141,19 @@ Return strict JSON: {"tip":"...","why":"...","practice":"...","approach_label":"
     const parsed = await generateJSON(systemPrompt, { finding, instruction: userPrompt });
     if ([parsed.tip, parsed.why, parsed.practice].every((value) => typeof value === "string" && value.trim())) {
       return {
-        tip: String(parsed.tip),
+        tip: parsed.tip.slice(0, config.MAX_TIP_TEXT),
         why: finding.evidence,
-        practice: String(parsed.practice),
-        approach_label: String(parsed.approach_label || "llm_coaching"),
+        practice: parsed.practice.slice(0, config.MAX_TIP_TEXT),
+        approach_label: String(parsed.approach_label || "llm_coaching").slice(0, 100),
       };
     }
   } catch (error) {
-    console.warn("C3 coaching uses evidence-based local exercise because Grok is unavailable.");
+    console.warn("C3 coaching uses a local exercise because the shared AI provider is unavailable.");
   }
 
-  return fallbackTip(finding, preferShorter);
+  const fallback = fallbackTip(finding, preferShorter, alternate);
+  if (alternate) fallback.practice = "Write three bullet points, rehearse a 60-second answer, then replay it and check the indicated measurement. Revise one point and try again.";
+  return fallback;
 }
 
 function evaluateOutcome(beforeValue, afterValue) {

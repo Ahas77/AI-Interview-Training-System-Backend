@@ -1,8 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const model = require("../src/models/c3Model");
-const service = require("../src/services/c3ProgressService");
-const { pool } = require("../src/config/db");
+const model = require("../models/store");
+const service = require("../services/progress");
+const { pool } = require("../../config/db");
 
 test.after(() => pool.end());
 

@@ -1,5 +1,7 @@
 # AI Interview Training System Backend
 
+> C3 migration: use [src/c3/README.md](src/c3/README.md) for the current sidecar, commands, routes and limitations. Earlier C3 sections and package-script examples below describe the superseded implementation.
+
 This backend is a Node.js and Express API for an AI-powered interview training system. It currently supports user authentication, CV upload, CV text extraction, AI-based resume parsing, interview-context saving, AI-generated HR interview questions, interview session tracking, and question/answer logging.
 
 The main business purpose of this service is to let a candidate register, upload a CV, convert that CV into structured professional data, choose a target company/job role/expertise level, and then run a short personalized HR interview practice session based on that candidate's real CV content.

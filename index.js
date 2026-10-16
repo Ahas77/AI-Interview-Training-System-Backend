@@ -5,21 +5,22 @@ const { initDB } = require("./src/config/db");
 const authRoutes = require("./src/routes/authRoutes");
 const cvRoutes = require("./src/routes/cvRoutes");
 const interviewRoutes = require("./src/routes/interviewRoutes");
-const c3Routes = require("./src/routes/c3Routes");
 
 const app = express();
 const port = process.env.PORT || 8000;
 
 // Middleware
 app.use(cors());
-app.use(express.json({ limit: "400kb" }));
+app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+app.use(require("./src/c3/middleware/observer"));
 
 // Routes
 app.use("/api", authRoutes);
 app.use("/api/cv", cvRoutes);
 app.use("/api/interview", interviewRoutes);
-app.use("/api/c3", c3Routes);
+app.use("/api/c3", require("./src/c3/routes"));
 
 app.get("/", (req, res) => {
   res.json({
@@ -30,6 +31,7 @@ app.get("/", (req, res) => {
 
 async function startServer() {
   await initDB();
+  await require("./src/c3/db/initC3").initC3();
   app.listen(port, () => {
     console.log(`Server running on http://localhost:${port}`);
   });

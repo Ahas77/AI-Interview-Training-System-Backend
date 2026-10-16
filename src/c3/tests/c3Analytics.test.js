@@ -5,8 +5,8 @@ const {
   summarizeQuestions,
   classifyDrift,
   spearmanCorrelation,
-} = require("../src/services/c3AnalyticsService");
-const { buildFindings, evaluateOutcome } = require("../src/services/c3CoachingService");
+} = require("../services/analytics");
+const { buildFindings, evaluateOutcome } = require("../services/coaching");
 
 test("buildBaselineMetrics computes mean, floored std, count, and confidence", () => {
   const baseline = buildBaselineMetrics([
@@ -80,9 +80,9 @@ test("buildFindings emits ranked findings for high deviations", () => {
     ],
   });
 
-  assert.equal(findings.length, 1);
-  assert.equal(findings[0].metric, "gaze_off");
-  assert.match(findings[0].evidence, /baseline/);
+  assert.equal(findings.length, 2);
+  assert.ok(findings.some((finding) => finding.metric === "gaze_off"));
+  assert.match(findings.find((finding) => finding.metric === "gaze_off").evidence, /baseline/);
 });
 
 test("evaluateOutcome compares before and after with margin", () => {

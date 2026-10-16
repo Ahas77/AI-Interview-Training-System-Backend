@@ -1,15 +1,14 @@
-const C3Model = require("../models/c3Model");
-const config = require("../config/c3Config");
+const C3Model = require("../models/store");
+const config = require("../config/thresholds");
 const {
   buildBaselineMetrics,
   summarizeQuestions,
   averageQuestionSummaries,
   mean,
   round,
-  classifyDrift,
   spearmanCorrelation,
-} = require("./c3AnalyticsService");
-const { buildFindings, generateTipText, evaluateOutcome, driftExplanation } = require("./c3CoachingService");
+} = require("./analytics");
+const { buildFindings, generateTipText, evaluateOutcome } = require("./coaching");
 
 async function getSessionSummary(sessionId, userId) {
   const session = await C3Model.getSessionForUser(sessionId, userId);
@@ -32,19 +31,21 @@ async function getAllSessionSummaries(userId) {
   return results;
 }
 
-async function buildBaselineForSession(userId, sessionId) {
+async function buildBaselineForSession(userId, sessionId, refresh = false) {
   let session = sessionId ? await C3Model.getSessionForUser(sessionId, userId) : null;
   let source = "warmup";
   let signals = [];
 
   if (session) {
+    source = session.session_type === "warmup" ? "warmup" : "confirmed_interview";
     signals = await C3Model.getSignalsForSession(session.id);
   } else {
     if (sessionId) return { status: "insufficient data", message: "Session not found or access denied." };
-    const sessions = (await C3Model.getInterviewSessionsForUser(userId)).slice(-2);
-    if (!sessions.length) return { status: "insufficient data", message: "No warm-up or interview signals available." };
+    const available = await C3Model.getInterviewSessionsForUser(userId);
+    const sessions = refresh ? available.slice(-config.BASELINE_SESSION_COUNT) : available.slice(0, config.BASELINE_SESSION_COUNT);
+    if (sessions.length < config.BASELINE_SESSION_COUNT) return { status: "insufficient data", message: "Use a warm-up or complete two interviews with delivery readings first." };
     signals = await C3Model.getSignalsForSessions(sessions.map((item) => item.id));
-    source = "recent_sessions";
+    source = refresh ? "recent_sessions" : "first_sessions_fallback";
     session = null;
   }
 
@@ -110,8 +111,9 @@ async function perTypeAnalysis(userId) {
     }));
     return {
       question_type: questionType,
-      status: items.length < 3 ? "insufficient data" : "ready",
+      status: items.length < config.MIN_TYPE_ANSWERS ? "insufficient data" : "ready",
       count: items.length,
+      scored_count: items.filter((item) => item.answer_score != null).length,
       average_score: agg.average_answer_score,
       average_delivery_deviation: agg.average_delivery_deviation,
       average_metrics: agg.average_metrics,
@@ -123,7 +125,7 @@ async function perTypeAnalysis(userId) {
     };
   });
 
-  const readyTypes = analysis.filter((item) => item.status === "ready" && item.average_score != null);
+  const readyTypes = analysis.filter((item) => item.status === "ready" && item.scored_count >= config.MIN_TYPE_ANSWERS);
   const weakest = readyTypes.sort((a, b) => a.average_score - b.average_score)[0] || null;
   return { status: "ready", overall, weakest_type: weakest?.question_type || null, analysis };
 }
@@ -133,7 +135,7 @@ async function progressComparison(userId) {
   if (all.length < 2) return { status: "insufficient data", message: "At least 2 interview sessions are required." };
 
   // Disjoint windows prevent two sessions from being compared with themselves.
-  const windowSize = Math.min(2, Math.floor(all.length / 2));
+  const windowSize = Math.min(config.PROGRESS_WINDOW_COUNT, Math.floor(all.length / 2));
   const first = all.slice(0, windowSize);
   const latest = all.slice(-windowSize);
   const firstAgg = averageQuestionSummaries(first.flatMap((item) => item.summaries));
@@ -181,56 +183,9 @@ async function progressComparison(userId) {
 }
 
 async function detectDrift(userId) {
-  const all = await getAllSessionSummaries(userId);
-  if (all.length < config.MIN_DRIFT_SESSIONS) {
-    return { status: "insufficient data", message: `At least ${config.MIN_DRIFT_SESSIONS} sessions are required before drift detection.` };
-  }
-
-  const reference = all.slice(0, Math.min(config.REFERENCE_DRIFT_SESSION_COUNT, all.length - config.RECENT_DRIFT_SESSION_COUNT));
-  const recent = all.slice(-config.RECENT_DRIFT_SESSION_COUNT);
-  const refAgg = averageQuestionSummaries(reference.flatMap((item) => item.summaries));
-  const recentAgg = averageQuestionSummaries(recent.flatMap((item) => item.summaries));
-  const metrics = Object.keys(recentAgg.average_metrics || {});
-  const scoreAvailable = refAgg.average_answer_score != null && recentAgg.average_answer_score != null;
-  const scoreChange = scoreAvailable ? recentAgg.average_answer_score - refAgg.average_answer_score : null;
-
-  const events = [];
-  metrics.forEach((metric) => {
-    const refValues = reference.map((item) => item.aggregate.average_metrics[metric]).filter((x) => x != null);
-    const recentValue = recentAgg.average_metrics[metric];
-    const recentValues = recent.map((item) => item.aggregate.average_metrics[metric]);
-    if (refValues.length < 2 || recentValues.some((value) => value == null) || recentValue == null) return;
-    const refMean = mean(refValues);
-    const refStd = Math.max(
-      Math.sqrt(refValues.reduce((sum, value) => sum + Math.pow(value - refMean, 2), 0) / refValues.length),
-      config.BASELINE_STD_FLOOR
-    );
-    const z = round((recentValue - refMean) / refStd);
-    if (Math.abs(z) < config.DRIFT_Z_THRESHOLD) return;
-    // Both recent sessions must cross the threshold in the same direction.
-    if (!recentValues.every((value) => Math.sign(value - refMean) === Math.sign(z) &&
-      Math.abs((value - refMean) / refStd) >= config.DRIFT_Z_THRESHOLD)) return;
-    const baseline = all[0].baseline?.metrics?.[metric];
-    const deviationChange = baseline ? Math.abs(recentValue - baseline.mean) - Math.abs(refMean - baseline.mean) : null;
-    const event = {
-      user_id: userId,
-      metric,
-      question_type: null,
-      z_score: z,
-      direction: z >= 0 ? "up" : "down",
-      classification: deviationChange == null ? "behaviour_shift" : classifyDrift({ deviationChange, scoreChange, scoreAvailable }),
-      detected_at_session_number: recent[recent.length - 1].session.session_number,
-    };
-    event.explanation = driftExplanation(event, scoreAvailable);
-    event.baseline_refresh_suggested = Math.abs(z) >= config.DRIFT_Z_THRESHOLD * 2;
-    events.push(event);
-  });
-
-  for (const event of events) {
-    await C3Model.insertDriftEvent(event);
-  }
-
-  return { status: "ready", events };
+  const result = require("./drift").detectDriftFromSessions(await getAllSessionSummaries(userId), userId);
+  for (const event of result.events || []) await C3Model.insertDriftEvent(event);
+  return result;
 }
 
 async function generateCoaching(userId, sessionId) {
@@ -241,7 +196,7 @@ async function generateCoaching(userId, sessionId) {
   const findings = buildFindings({
     summaries: summary.summaries,
     allSessionSummaries: all.map((item) => item.summaries),
-    driftEvents: [],
+    driftEvents: require("./drift").detectDriftFromSessions(all, userId).events || [],
   });
 
   if (!findings.length) {
@@ -257,17 +212,14 @@ async function generateCoaching(userId, sessionId) {
       (tip) => tip.metric === finding.metric && tip.followed === "yes" && tip.outcome_status === "no_change"
     );
     const notFollowed = existingTips.find((tip) => tip.metric === finding.metric && tip.followed === "no");
-    const text = await generateTipText(finding, Boolean(notFollowed));
-    if (failedFollowed && text.approach_label === failedFollowed.approach_label) {
-      text.approach_label = `${text.approach_label}_alternate`;
-    }
+    const text = await generateTipText(finding, Boolean(notFollowed), Boolean(failedFollowed));
     const tip = {
       user_id: userId,
       session_id: sessionId,
       qa_id: finding.qa_id,
       question_type: finding.question_type,
       metric: finding.metric,
-      before_value: finding.metric === "answer_score" ? finding.before_value : Math.abs(finding.deviation),
+      before_value: finding.metric === "answer_score" ? finding.before_value : finding.deviation == null ? null : Math.abs(finding.deviation),
       goal_text: finding.metric === "answer_score" ? "Improve answer content using the same rubric." : `Reduce distance of ${finding.metric} from your personal baseline.`,
       tip: text.tip,
       why: finding.evidence,
@@ -276,12 +228,12 @@ async function generateCoaching(userId, sessionId) {
       evidence: finding.evidence,
       baseline_version: summary.baseline?.version || null,
     };
-    tip.id = await C3Model.insertCoachingTip(tip);
+    try { tip.id = await C3Model.insertCoachingTip(tip); } catch (error) { if (error.code === "ER_DUP_ENTRY") continue; throw error; }
     tip.outcome_status = "open";
     tips.push(tip);
   }
 
-  return { status: "ready", tips };
+  return { status: "ready", tips: tips.length ? tips : await C3Model.getTipsForUser(userId, sessionId) };
 }
 
 async function evaluateOpenTips(userId) {
@@ -290,12 +242,13 @@ async function evaluateOpenTips(userId) {
   const results = [];
 
   for (const tip of tips) {
+    if (tip.before_value == null) continue;
     const origin = all.find((item) => Number(item.session.id) === Number(tip.session_id));
     if (!origin) continue;
     if (tip.metric !== "answer_score" && (!tip.baseline_version || Number(tip.baseline_version) !== Number(origin.baseline?.version))) continue;
     const later = all
       .filter((item) => Number(item.session.session_number) > Number(origin.session.session_number))
-      .slice(0, 2);
+      .slice(0, config.OUTCOME_SESSION_COUNT);
     const matching = later.flatMap((item) =>
       item.summaries.filter((summary) => !tip.question_type || summary.question_type === tip.question_type)
     );
@@ -327,8 +280,8 @@ async function evaluationRows(includeDemo = false) {
       const rating = ratings.find((r) => Number(r.session_id) === Number(item.session.id));
       const sessionTips = tips.filter((tip) => Number(tip.session_id) === Number(item.session.id));
       rows.push({
-        user_id: userId,
-        session_id: item.session.id,
+        user_id: require("./privacy").pseudonym("user", userId),
+        session_id: require("./privacy").pseudonym("session", item.session.id),
         session_number: item.session.session_number,
         fixed_threshold_progress: index === 0 || first.average_answer_score == null || item.aggregate.average_answer_score == null ? null : round(item.aggregate.average_answer_score - first.average_answer_score),
         baseline_relative_progress: index === 0 || first.average_delivery_deviation == null || item.aggregate.average_delivery_deviation == null ? null : round(first.average_delivery_deviation - item.aggregate.average_delivery_deviation),
@@ -352,18 +305,18 @@ async function correlationSummary(includeDemo = false) {
   }
   const rows = [...latestByUser.values()];
   const participantCount = new Set(rows.map((row) => row.user_id)).size;
-  if (participantCount < 5) {
+  const fixedPairs = rows.filter((row) => row.fixed_threshold_progress != null).map((row) => ({ x: Number(row.fixed_threshold_progress), y: Number(row.self_rated_improvement) }));
+  const relativePairs = rows.filter((row) => row.baseline_relative_progress != null).map((row) => ({ x: Number(row.baseline_relative_progress), y: Number(row.self_rated_improvement) }));
+  if (participantCount < config.MIN_EVALUATION_PARTICIPANTS) {
     return { status: "insufficient data", message: "At least 5 participants are required.", participant_count: participantCount };
   }
   return {
     status: "ready",
     participant_count: participantCount,
-    fixed_threshold_spearman: spearmanCorrelation(
-      rows.filter((row) => row.fixed_threshold_progress != null).map((row) => ({ x: Number(row.fixed_threshold_progress), y: Number(row.self_rated_improvement) }))
-    ),
-    baseline_relative_spearman: spearmanCorrelation(
-      rows.filter((row) => row.baseline_relative_progress != null).map((row) => ({ x: Number(row.baseline_relative_progress), y: Number(row.self_rated_improvement) }))
-    ),
+    fixed_threshold_participant_count: fixedPairs.length,
+    baseline_relative_participant_count: relativePairs.length,
+    fixed_threshold_spearman: fixedPairs.length >= config.MIN_EVALUATION_PARTICIPANTS ? spearmanCorrelation(fixedPairs) : null,
+    baseline_relative_spearman: relativePairs.length >= config.MIN_EVALUATION_PARTICIPANTS ? spearmanCorrelation(relativePairs) : null,
   };
 }
 
