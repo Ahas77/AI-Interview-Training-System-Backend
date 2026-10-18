@@ -3,7 +3,7 @@
 import argparse
 from itertools import islice
 
-from datasets import load_dataset
+from datasets import Video, load_dataset
 from datasets.exceptions import DatasetNotFoundError
 
 DATASET_ID = "AI4A-lab/RecruitView"
@@ -21,6 +21,10 @@ def inspect_dataset(sample_count: int = 1) -> None:
         ) from error
     print("Dataset splits:", list(dataset.keys()))
     for split_name, split in dataset.items():
+        # Metadata inspection should not require torchcodec or FFmpeg.
+        # Video decoding is deferred to feature extraction.
+        if "video" in split.column_names:
+            split = split.cast_column("video", Video(decode=False))
         print(f"\n--- {split_name} ---")
         print("Columns:", split.column_names)
         print("Features:", split.features)
