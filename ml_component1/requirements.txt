@@ -8,3 +8,4 @@ opencv-python
 mediapipe
 datasets
 scikit-learn
+python-multipart
