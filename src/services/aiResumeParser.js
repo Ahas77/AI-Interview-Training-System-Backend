@@ -77,6 +77,9 @@ JSON SCHEMA TO RETURN:
  */
 function cleanJSONString(str) {
   if (!str) return "";
+  if (typeof str !== "string") {
+    return typeof str === "object" ? JSON.stringify(str) : String(str);
+  }
   let cleaned = str.trim();
   if (cleaned.startsWith("```json")) {
     cleaned = cleaned.replace(/^```json\s*/i, "").replace(/\s*```$/, "");
@@ -310,8 +313,13 @@ async function parseResume(rawText) {
       return heuristicFallbackParse(rawText);
     }
 
-    const cleaned = cleanJSONString(rawAiResponse);
-    const parsed = JSON.parse(cleaned);
+    let parsed = null;
+    if (typeof rawAiResponse === "object" && rawAiResponse !== null) {
+      parsed = rawAiResponse;
+    } else {
+      const cleaned = cleanJSONString(rawAiResponse);
+      parsed = JSON.parse(cleaned);
+    }
 
     return normalizeParsedData(parsed);
   } catch (err) {

@@ -125,7 +125,19 @@ const InterviewModel = {
    */
   async getQALogs(sessionId) {
     const query = `
-      SELECT id, question_number, question_text, user_answer_text, created_at
+      SELECT 
+        id, 
+        session_id, 
+        question_number, 
+        question_text, 
+        user_answer_text, 
+        evaluation_status, 
+        score, 
+        feedback, 
+        correct_answer, 
+        category, 
+        evaluated_at, 
+        created_at
       FROM interview_qa_logs
       WHERE session_id = ?
       ORDER BY question_number ASC
@@ -133,6 +145,45 @@ const InterviewModel = {
 
     const [rows] = await pool.query(query, [sessionId]);
     return rows;
+  },
+
+  /**
+   * Update evaluation results for a specific Q&A log
+   */
+  async updateQAEvaluation(qaId, { evaluationStatus, score, feedback, correctAnswer, category = null }) {
+    const query = `
+      UPDATE interview_qa_logs
+      SET 
+        evaluation_status = ?,
+        score = ?,
+        feedback = ?,
+        correct_answer = ?,
+        category = COALESCE(?, category),
+        evaluated_at = NOW()
+      WHERE id = ?
+    `;
+
+    await pool.query(query, [
+      evaluationStatus || "unanswered",
+      typeof score === "number" ? score : null,
+      feedback || null,
+      correctAnswer || null,
+      category,
+      qaId,
+    ]);
+  },
+
+  /**
+   * Update technical score for session
+   */
+  async updateSessionScore(sessionId, score) {
+    const query = `
+      UPDATE interview_sessions
+      SET technical_score = ?
+      WHERE id = ?
+    `;
+
+    await pool.query(query, [score, sessionId]);
   },
 
   /**

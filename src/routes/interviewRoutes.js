@@ -26,5 +26,6 @@ router.post("/technical/start", verifyToken, interviewController.startTechnicalS
 router.get("/technical/session/:id", verifyToken, interviewController.getTechnicalSession);
 router.post("/technical/submit-answer", verifyToken, interviewController.submitTechnicalAnswer);
 router.post("/technical/complete", verifyToken, interviewController.completeTechnicalSession);
+router.get("/technical/summary/:sessionId", verifyToken, interviewController.getTechnicalSummary);
 
 module.exports = router;

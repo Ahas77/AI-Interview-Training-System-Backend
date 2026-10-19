@@ -1,6 +1,7 @@
 const InterviewModel = require("../models/interviewModel");
 const HRAiAgentService = require("../services/hrAiAgentService");
 const TechnicalAiAgentService = require("../services/technicalAiAgentService");
+const TechnicalEvaluationService = require("../services/technicalEvaluationService");
 const CompanyModel = require("../models/companyModel");
 const CompanyRequirementsService = require("../services/companyRequirementsService");
 const CVModel = require("../models/cvModel");
@@ -503,7 +504,16 @@ const interviewController = {
         qaLogs = [{ id: qaId, question_number: 1, question_text: q1Text, user_answer_text: null }];
       }
 
-      const latestQA = qaLogs[qaLogs.length - 1];
+      let summary = null;
+      if (session.status === "completed" || session.status === "technical_completed") {
+        try {
+          summary = await TechnicalEvaluationService.evaluateTechnicalSession(sessionId, req.user.id);
+        } catch (e) {
+          console.warn("getTechnicalSession summary error:", e.message);
+        }
+      }
+
+      const latestQA = qaLogs && qaLogs.length > 0 ? qaLogs[qaLogs.length - 1] : null;
 
       return res.status(200).json({
         success: true,
@@ -511,6 +521,7 @@ const interviewController = {
         qaLogs,
         companyRequirements,
         totalQuestions: 10,
+        summary,
         currentQuestion: latestQA
           ? {
               id: latestQA.id,
@@ -558,10 +569,21 @@ const interviewController = {
         await InterviewModel.completeSession(sessionId);
         await UserModel.updateInterviewStatus(req.user.id, "technical_completed", null);
 
+        let summaryData = null;
+        try {
+          summaryData = await TechnicalEvaluationService.evaluateTechnicalSession(
+            sessionId,
+            req.user.id
+          );
+        } catch (evalErr) {
+          console.warn("Completion evaluation error:", evalErr.message);
+        }
+
         return res.status(200).json({
           success: true,
           isCompleted: true,
           message: "All 10 Technical Questions completed successfully!",
+          summary: summaryData,
         });
       }
 
@@ -655,6 +677,40 @@ const interviewController = {
       return res.status(500).json({
         success: false,
         message: "Failed to complete technical interview session.",
+      });
+    }
+  },
+
+  /**
+   * GET /api/interview/technical/summary/:sessionId
+   * Evaluates and returns the full performance summary of all asked questions,
+   * candidate answers, correctness status, scores, feedback, and ideal answers.
+   */
+  async getTechnicalSummary(req, res) {
+    try {
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({ success: false, message: "Unauthorized." });
+      }
+
+      const sessionId = parseInt(req.params.sessionId, 10);
+      if (isNaN(sessionId)) {
+        return res.status(400).json({ success: false, message: "Valid Session ID required." });
+      }
+
+      const summary = await TechnicalEvaluationService.evaluateTechnicalSession(
+        sessionId,
+        req.user.id
+      );
+
+      return res.status(200).json({
+        success: true,
+        ...summary,
+      });
+    } catch (error) {
+      console.error("getTechnicalSummary Error:", error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || "Failed to generate technical interview summary.",
       });
     }
   },

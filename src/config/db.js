@@ -262,6 +262,23 @@ async function initDB() {
       }
     }
 
+    // 11. Migrations for interview_qa_logs (evaluation status, score, feedback, correct_answer)
+    const qaCols = [
+      "ALTER TABLE interview_qa_logs ADD COLUMN evaluation_status VARCHAR(50) DEFAULT NULL;",
+      "ALTER TABLE interview_qa_logs ADD COLUMN score INT DEFAULT NULL;",
+      "ALTER TABLE interview_qa_logs ADD COLUMN feedback TEXT DEFAULT NULL;",
+      "ALTER TABLE interview_qa_logs ADD COLUMN correct_answer TEXT DEFAULT NULL;",
+      "ALTER TABLE interview_qa_logs ADD COLUMN category VARCHAR(100) DEFAULT NULL;",
+      "ALTER TABLE interview_qa_logs ADD COLUMN evaluated_at TIMESTAMP NULL DEFAULT NULL;",
+    ];
+    for (const qCol of qaCols) {
+      try {
+        await pool.query(qCol);
+      } catch (e) {
+        // Column already exists
+      }
+    }
+
     console.log("Database, users, cv_analysis, interview_sessions, company intelligence & technical tables initialized successfully.");
   } catch (error) {
     console.error("Database initialization error:", error.message);

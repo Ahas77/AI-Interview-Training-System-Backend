@@ -69,7 +69,6 @@ class AIProvider {
           { role: "system", content: `${systemPrompt}\nOutput strict valid JSON only.` },
           { role: "user", content: typeof userPrompt === "string" ? userPrompt.slice(0, 4000) : JSON.stringify(userPrompt).slice(0, 4000) },
         ],
-        model: "openai",
         jsonMode: true,
       };
 
@@ -95,7 +94,6 @@ class AIProvider {
               content: `${systemPrompt}\n\n${typeof userPrompt === "string" ? userPrompt.slice(0, 3000) : ""}\n\nOutput valid JSON strictly.`,
             },
           ],
-          model: "qwen",
           jsonMode: true,
         },
         {
@@ -150,16 +148,60 @@ class AIProvider {
   }
 
   /**
+   * Dynamically fetch available chat models for the Groq API key
+   */
+  static async getGroqModels(apiKey) {
+    if (this._groqModelsCache && Date.now() - this._groqModelsTime < 3600000) {
+      return this._groqModelsCache;
+    }
+
+    try {
+      const res = await axios.get("https://api.groq.com/openai/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        timeout: 5000,
+      });
+
+      if (res.data?.data && Array.isArray(res.data.data)) {
+        // Filter out non-chat models (audio transcription, guardrails, etc.)
+        const chatModels = res.data.data
+          .filter(
+            (m) =>
+              m.active !== false &&
+              !m.id.includes("whisper") &&
+              !m.id.includes("guard")
+          )
+          .map((m) => m.id);
+
+        if (chatModels.length > 0) {
+          this._groqModelsCache = chatModels;
+          this._groqModelsTime = Date.now();
+          return chatModels;
+        }
+      }
+    } catch (e) {
+      // Fallback silently to static list
+    }
+
+    return [
+      "openai/gpt-oss-120b",
+      "openai/gpt-oss-20b",
+      "qwen/qwen3.8-27b",
+      "llama-3.3-70b-versatile",
+      "llama-3.1-8b-instant",
+    ];
+  }
+
+  /**
    * Call Groq API with automatic model fallback
    */
   static async callGroq(apiKey, systemPrompt, userPrompt) {
     const url = "https://api.groq.com/openai/v1/chat/completions";
-    const models = [
-      "llama-3.3-70b-versatile",
-      "llama-3.1-8b-instant",
-      "llama3-8b-8192",
-      "mixtral-8x7b-32768",
-    ];
+    const models = await this.getGroqModels(apiKey);
+
+    // Groq requires the word 'json' in system or user prompt when using json_object format
+    const safeSystemPrompt = systemPrompt.toLowerCase().includes("json")
+      ? systemPrompt
+      : `${systemPrompt}\nOutput strict valid JSON format.`;
 
     let lastError = null;
     for (const model of models) {
@@ -167,8 +209,8 @@ class AIProvider {
         const payload = {
           model,
           messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
+            { role: "system", content: safeSystemPrompt },
+            { role: "user", content: typeof userPrompt === "string" ? userPrompt : JSON.stringify(userPrompt) },
           ],
           response_format: { type: "json_object" },
           temperature: 0.3,
