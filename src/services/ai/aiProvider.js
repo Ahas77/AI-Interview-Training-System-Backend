@@ -9,6 +9,7 @@ class AIProvider {
    * Call the configured AI provider with system and user prompts requiring JSON output.
    */
   static async generateJSON(systemPrompt, userPrompt) {
+    let rawOutput = null;
     const apiKey = (
       process.env.GROQ_API_KEY ||
       process.env.XAI_API_KEY ||
@@ -20,13 +21,13 @@ class AIProvider {
     if (apiKey) {
       try {
         if (apiKey.startsWith("xai-")) {
-          return await this.callXAI(apiKey, systemPrompt, userPrompt);
+          rawOutput = await this.callXAI(apiKey, systemPrompt, userPrompt);
         } else if (apiKey.startsWith("gsk_")) {
-          return await this.callGroq(apiKey, systemPrompt, userPrompt);
+          rawOutput = await this.callGroq(apiKey, systemPrompt, userPrompt);
         } else if (apiKey.startsWith("AIza")) {
-          return await this.callGemini(apiKey, systemPrompt, userPrompt);
+          rawOutput = await this.callGemini(apiKey, systemPrompt, userPrompt);
         } else {
-          return await this.callGroq(apiKey, systemPrompt, userPrompt).catch(() =>
+          rawOutput = await this.callGroq(apiKey, systemPrompt, userPrompt).catch(() =>
             this.callXAI(apiKey, systemPrompt, userPrompt)
           );
         }
@@ -35,20 +36,38 @@ class AIProvider {
       }
     }
 
-    // Always fallback to Free Real-Time LLM endpoint for 100% unscripted AI generation!
-    return await this.callFreeLLM(systemPrompt, userPrompt);
+    if (!rawOutput) {
+      rawOutput = await this.callFreeLLM(systemPrompt, userPrompt);
+    }
+
+    if (typeof rawOutput === "object" && rawOutput !== null) {
+      return rawOutput;
+    }
+
+    if (typeof rawOutput === "string") {
+      try {
+        const jsonMatch = rawOutput.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || rawOutput.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          return JSON.parse(jsonMatch[1] || jsonMatch[0]);
+        }
+        return JSON.parse(rawOutput);
+      } catch (e) {
+        return { text: rawOutput };
+      }
+    }
+
+    return rawOutput || {};
   }
 
   /**
    * Free Real-Time LLM Provider
    */
   static async callFreeLLM(systemPrompt, userPrompt) {
-    // Attempt 1: Pollinations POST API with openai model
     try {
       const payload = {
         messages: [
-          { role: "system", content: `${systemPrompt}\nReturn valid JSON strictly: {"question": "..."}` },
-          { role: "user", content: userPrompt },
+          { role: "system", content: `${systemPrompt}\nOutput strict valid JSON only.` },
+          { role: "user", content: typeof userPrompt === "string" ? userPrompt.slice(0, 4000) : JSON.stringify(userPrompt).slice(0, 4000) },
         ],
         model: "openai",
         jsonMode: true,
@@ -56,31 +75,38 @@ class AIProvider {
 
       const res = await axios.post("https://text.pollinations.ai/", payload, {
         headers: { "Content-Type": "application/json" },
-        timeout: 15000,
+        timeout: 20000,
       });
 
       if (res.data) {
-        const text = typeof res.data === "string" ? res.data : JSON.stringify(res.data);
-        if (text.includes("question")) return text;
+        return res.data;
       }
     } catch (e) {
-      // Ignore & try GET method
+      // Try secondary model
     }
 
-    // Attempt 2: Pollinations GET API
     try {
-      const combined = `${systemPrompt}\n${userPrompt}\nReturn JSON format: {"question": "..."}`;
-      const encoded = encodeURIComponent(combined);
-      const res = await axios.get(`https://text.pollinations.ai/${encoded}?model=qwen&json=true`, {
-        timeout: 15000,
-      });
+      const res = await axios.post(
+        "https://text.pollinations.ai/",
+        {
+          messages: [
+            {
+              role: "user",
+              content: `${systemPrompt}\n\n${typeof userPrompt === "string" ? userPrompt.slice(0, 3000) : ""}\n\nOutput valid JSON strictly.`,
+            },
+          ],
+          model: "qwen",
+          jsonMode: true,
+        },
+        {
+          headers: { "Content-Type": "application/json" },
+          timeout: 20000,
+        }
+      );
 
-      if (res.data) {
-        const text = typeof res.data === "string" ? res.data : JSON.stringify(res.data);
-        return text;
-      }
+      if (res.data) return res.data;
     } catch (e) {
-      console.error("Free LLM fallback error:", e.message);
+      console.warn("Free LLM fallback failed:", e.message);
     }
 
     return null;

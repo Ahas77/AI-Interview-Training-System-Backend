@@ -22,11 +22,6 @@ const CVModel = {
       targetJobRole,
       targetExpertiseLevel,
       status,
-
-        /**
-   * GET /api/cv/:id
-   * Returns specific CV analysis by ID for authenticated user
-   */
     } = data;
 
     const query = `
@@ -64,9 +59,6 @@ const CVModel = {
       suggestedRole || null,
       suggestedLevel || null,
       targetCompany || null,
-
-
-
       targetJobRole || null,
       targetExpertiseLevel || null,
       status || "started",
@@ -104,8 +96,6 @@ const CVModel = {
     return this.formatRecord(rows[0]);
   },
 
-
-  
   /**
    * Get all CV analyses for a user
    */

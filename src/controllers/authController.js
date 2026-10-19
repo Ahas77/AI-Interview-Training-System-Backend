@@ -177,6 +177,8 @@ const authController = {
           email: user.email,
           role: user.role || "user",
           avatar: user.avatar || "",
+          interview_status: user.interview_status || "no_cv",
+          active_session_id: user.active_session_id || null,
         },
       });
     } catch (error) {
@@ -212,6 +214,8 @@ const authController = {
           gender: user.gender || "Male",
           status: "approved",
           avatar: user.avatar,
+          interview_status: user.interview_status || "no_cv",
+          active_session_id: user.active_session_id || null,
           qr_code: null,
         },
       });
