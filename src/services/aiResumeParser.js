@@ -3,7 +3,6 @@ const AIProvider = require("./ai/aiProvider");
 const SYSTEM_PROMPT = `
 You are an expert AI Resume Parser specialized exclusively in the IT & Software Engineering Industry. You analyze raw curriculum vitae (CV) text for IT professionals (Software Engineers, Frontend/Backend/Full Stack Developers, DevOps/Cloud Engineers, QA/Automation Engineers, Data Engineers, AI/ML Engineers, Mobile Developers, System Architects, Security Engineers, UI/UX Engineers) and extract comprehensive, structured technical information in strict JSON format.
 
-
 RULES:
 1. Do NOT hallucinate or invent information. Every piece of data must be directly supported by the CV text.
 2. If a scalar field is missing or not mentioned, return null.
@@ -12,9 +11,6 @@ RULES:
 5. "expertise_level" MUST be one of: "Intern", "Junior", "Mid-Level", "Senior", "Lead", "Manager", or null. Do not invent seniority.
 6. "suggested_job_roles" MUST contain realistic IT job roles explicitly supported by the CV (e.g. ["Software Engineer", "Full Stack Developer", "Backend Engineer", "Frontend Engineer", "DevOps Engineer", "QA Engineer", "Mobile Developer", "Data Engineer"]).
 7. Focus sharply on tech stacks, programming languages, frameworks, databases, cloud providers, DevOps tools, architectural patterns, and IT project responsibilities.
-
-
-
 
 JSON SCHEMA TO RETURN:
 {
@@ -81,6 +77,9 @@ JSON SCHEMA TO RETURN:
  */
 function cleanJSONString(str) {
   if (!str) return "";
+  if (typeof str !== "string") {
+    return typeof str === "object" ? JSON.stringify(str) : String(str);
+  }
   let cleaned = str.trim();
   if (cleaned.startsWith("```json")) {
     cleaned = cleaned.replace(/^```json\s*/i, "").replace(/\s*```$/, "");
@@ -314,8 +313,13 @@ async function parseResume(rawText) {
       return heuristicFallbackParse(rawText);
     }
 
-    const cleaned = cleanJSONString(rawAiResponse);
-    const parsed = JSON.parse(cleaned);
+    let parsed = null;
+    if (typeof rawAiResponse === "object" && rawAiResponse !== null) {
+      parsed = rawAiResponse;
+    } else {
+      const cleaned = cleanJSONString(rawAiResponse);
+      parsed = JSON.parse(cleaned);
+    }
 
     return normalizeParsedData(parsed);
   } catch (err) {

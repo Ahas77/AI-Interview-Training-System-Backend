@@ -18,10 +18,24 @@ const User = {
 
   async findById(id) {
     const [rows] = await pool.query(
-      "SELECT id, first_name, last_name, email, mobile_contact_number, nic, address, date_of_birth, gender, role, avatar, created_at FROM users WHERE id = ? LIMIT 1",
+      "SELECT id, first_name, last_name, email, mobile_contact_number, nic, address, date_of_birth, gender, role, avatar, interview_status, active_session_id, created_at FROM users WHERE id = ? LIMIT 1",
       [id]
     );
     return rows[0] || null;
+  },
+
+  async updateInterviewStatus(userId, status, activeSessionId = null) {
+    if (activeSessionId !== undefined) {
+      await pool.query(
+        "UPDATE users SET interview_status = ?, active_session_id = ? WHERE id = ?",
+        [status, activeSessionId, userId]
+      );
+    } else {
+      await pool.query(
+        "UPDATE users SET interview_status = ? WHERE id = ?",
+        [status, userId]
+      );
+    }
   },
 
   async createUser(userData) {
