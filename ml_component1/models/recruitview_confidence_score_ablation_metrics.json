@@ -1,0 +1,35 @@
+{
+  "dataset": "AI4A-lab/RecruitView",
+  "target": "confidence_score",
+  "model_type": "ridge",
+  "total_rows": 2011,
+  "participants": 331,
+  "train_rows": 1603,
+  "test_rows": 408,
+  "ablation_results": {
+    "M0_population_baseline": {
+      "description": "General non-personalized population baseline (transcript + metadata)",
+      "mae": 0.7504,
+      "rmse": 1.099,
+      "r2": 0.0729
+    },
+    "M1_vocal_acoustic": {
+      "description": "8 Vocal acoustic features (F0, pitch var, speech rate, pauses, energy, jitter, MFCC)",
+      "mae": 0.7384,
+      "rmse": 1.0841,
+      "r2": 0.0978
+    },
+    "M2_multimodal_vocal_facial": {
+      "description": "Multimodal: 8 Vocal + 5 Facial features (13 total features)",
+      "mae": 0.7417,
+      "rmse": 1.0845,
+      "r2": 0.0972
+    },
+    "M3_personalized_baseline_calibration": {
+      "description": "Personalized candidate baseline calibration (warm-up baseline subtraction)",
+      "mae": 0.8142,
+      "rmse": 1.1645,
+      "r2": 0.0799
+    }
+  }
+}
