@@ -20,6 +20,11 @@ async function getPdfJs() {
   return pdfjsLibInstance;
 }
 
+
+
+
+
+
 /**
  * Check if the extracted text has sufficient quality/length
  * @param {string} text
@@ -32,6 +37,10 @@ function isTextSufficient(text) {
   const wordCount = cleaned.split(/\s+/).filter(Boolean).length;
   return wordCount >= 10;
 }
+
+
+
+
 
 /**
  * Extract text from PDF using pdfjs-dist page text items
@@ -62,6 +71,15 @@ async function extractTextWithPdfJs(dataBuffer) {
     return "";
   }
 }
+
+
+
+
+
+
+
+
+
 
 /**
  * Extract complete text from PDF or DOCX file

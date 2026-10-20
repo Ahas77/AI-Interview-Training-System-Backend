@@ -2,6 +2,7 @@ const path = require("path");
 const { extractTextFromDocument } = require("../services/documentTextExtractor");
 const { parseResume } = require("../services/aiResumeParser");
 const CVModel = require("../models/cvModel");
+const UserModel = require("../models/userModel");
 
 const cvController = {
   /**
@@ -94,8 +95,11 @@ const cvController = {
           targetCompany: null,
           targetJobRole: suggestedRole,
           targetExpertiseLevel: suggestedLevel,
-          status: "uploaded",
+          status: "cv_uploaded",
         });
+
+        // Update user status in users table
+        await UserModel.updateInterviewStatus(userId, "cv_uploaded", null);
       } catch (dbErr) {
         console.error("Error saving CV analysis record to DB on upload:", dbErr);
       }
@@ -107,6 +111,7 @@ const cvController = {
         data: {
           id: insertId,
           user_id: userId,
+          interview_status: "cv_uploaded",
           file_name: originalName,
           file_path: savedFileName,
           raw_text: rawText,

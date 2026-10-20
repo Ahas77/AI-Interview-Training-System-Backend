@@ -5,7 +5,17 @@ const InterviewModel = {
    * Create a new interview session
    */
   async createSession(data) {
-    const { userId, cvId, targetCompany, jobRole, expertiseLevel, totalQuestions = 5 } = data;
+    const {
+      userId,
+      cvId,
+      targetCompany,
+      jobRole,
+      expertiseLevel,
+      totalQuestions = 5,
+      roundType = "hr",
+      jobPostingId = null,
+      parentSessionId = null,
+    } = data;
 
     const query = `
       INSERT INTO interview_sessions (
@@ -16,8 +26,11 @@ const InterviewModel = {
         expertise_level,
         status,
         total_questions,
-        current_question_index
-      ) VALUES (?, ?, ?, ?, ?, 'in_progress', ?, 1)
+        current_question_index,
+        round_type,
+        job_posting_id,
+        parent_session_id
+      ) VALUES (?, ?, ?, ?, ?, 'in_progress', ?, 1, ?, ?, ?)
     `;
 
     const [result] = await pool.query(query, [
@@ -27,9 +40,23 @@ const InterviewModel = {
       jobRole,
       expertiseLevel,
       totalQuestions,
+      roundType,
+      jobPostingId,
+      parentSessionId,
     ]);
 
     return result.insertId;
+  },
+
+  /**
+   * Create a 10-Question Technical Interview Session
+   */
+  async createTechnicalSession(data) {
+    return this.createSession({
+      ...data,
+      totalQuestions: 10,
+      roundType: "technical",
+    });
   },
 
   /**
@@ -44,6 +71,23 @@ const InterviewModel = {
     `;
 
     const [rows] = await pool.query(query, [sessionId, userId]);
+    return rows.length > 0 ? rows[0] : null;
+  },
+
+  /**
+   * Get active in-progress or hr_pending session for a user
+   */
+  async getActiveSessionByUserId(userId) {
+    const query = `
+      SELECT id, user_id, cv_id, target_company, job_role, expertise_level,
+             status, total_questions, current_question_index, round_type, 
+             job_posting_id, parent_session_id, created_at
+      FROM interview_sessions
+      WHERE user_id = ? AND (status = 'in_progress' OR status = 'hr_pending' OR status = 'technical_pending')
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    const [rows] = await pool.query(query, [userId]);
     return rows.length > 0 ? rows[0] : null;
   },
 
@@ -81,7 +125,19 @@ const InterviewModel = {
    */
   async getQALogs(sessionId) {
     const query = `
-      SELECT id, question_number, question_text, user_answer_text, created_at
+      SELECT 
+        id, 
+        session_id, 
+        question_number, 
+        question_text, 
+        user_answer_text, 
+        evaluation_status, 
+        score, 
+        feedback, 
+        correct_answer, 
+        category, 
+        evaluated_at, 
+        created_at
       FROM interview_qa_logs
       WHERE session_id = ?
       ORDER BY question_number ASC
@@ -89,6 +145,45 @@ const InterviewModel = {
 
     const [rows] = await pool.query(query, [sessionId]);
     return rows;
+  },
+
+  /**
+   * Update evaluation results for a specific Q&A log
+   */
+  async updateQAEvaluation(qaId, { evaluationStatus, score, feedback, correctAnswer, category = null }) {
+    const query = `
+      UPDATE interview_qa_logs
+      SET 
+        evaluation_status = ?,
+        score = ?,
+        feedback = ?,
+        correct_answer = ?,
+        category = COALESCE(?, category),
+        evaluated_at = NOW()
+      WHERE id = ?
+    `;
+
+    await pool.query(query, [
+      evaluationStatus || "unanswered",
+      typeof score === "number" ? score : null,
+      feedback || null,
+      correctAnswer || null,
+      category,
+      qaId,
+    ]);
+  },
+
+  /**
+   * Update technical score for session
+   */
+  async updateSessionScore(sessionId, score) {
+    const query = `
+      UPDATE interview_sessions
+      SET technical_score = ?
+      WHERE id = ?
+    `;
+
+    await pool.query(query, [score, sessionId]);
   },
 
   /**
