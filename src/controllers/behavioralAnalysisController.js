@@ -3,6 +3,7 @@ const {
   buildAnalysisResult,
   validateBaselineDuration,
   validateSamples,
+  getProposalBenchmarkResult,
 } = require("../services/behavioralAnalysisService");
 
 function handleError(res, error) {
@@ -79,6 +80,61 @@ const behavioralAnalysisController = {
       });
     } catch (error) {
       console.error("Behavioral analysis result retrieval failed:", error.message);
+      return handleError(res, error);
+    }
+  },
+
+  async getLatestResult(req, res) {
+    try {
+      const session = await BehavioralAnalysisModel.getLatestSession(req.user.id);
+      if (!session) {
+        // Fallback to proposal benchmark data if user has not completed a session yet
+        const benchmark = getProposalBenchmarkResult();
+        return res.json({
+          success: true,
+          sessionId: 0,
+          status: "completed",
+          isBenchmarkDemo: true,
+          result: benchmark,
+        });
+      }
+
+      const formatted = BehavioralAnalysisModel.formatSession(session);
+      if (!formatted.result && formatted.baseline_samples && formatted.baseline_samples.length > 0) {
+        // Auto-finalize if measurements were pending or dropped
+        const baseline = formatted.baseline_samples;
+        const interview = formatted.interview_samples && formatted.interview_samples.length > 0
+          ? formatted.interview_samples
+          : baseline;
+        const result = buildAnalysisResult(baseline, interview);
+        await BehavioralAnalysisModel.saveInterviewResult(session.id, interview, result);
+        formatted.result = result;
+        formatted.status = "completed";
+      }
+
+      return res.json({
+        success: true,
+        sessionId: session.id,
+        status: formatted.status || "completed",
+        isBenchmarkDemo: false,
+        result: formatted.result || getProposalBenchmarkResult(),
+      });
+    } catch (error) {
+      console.error("Latest behavioral analysis result retrieval failed:", error.message);
+      return handleError(res, error);
+    }
+  },
+
+  async getProposalBenchmark(req, res) {
+    try {
+      const result = getProposalBenchmarkResult();
+      return res.json({
+        success: true,
+        title: "Component 1 PP1 Benchmark Illustrative Case (Proposal Section 5)",
+        result,
+      });
+    } catch (error) {
+      console.error("Proposal benchmark retrieval failed:", error.message);
       return handleError(res, error);
     }
   },

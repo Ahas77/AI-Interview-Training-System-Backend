@@ -18,6 +18,24 @@ const BehavioralAnalysisModel = {
     return rows[0] || null;
   },
 
+  async getLatestSession(userId) {
+    const [completedRows] = await pool.query(
+      `SELECT * FROM behavioral_analysis_sessions 
+       WHERE user_id = ? AND (result IS NOT NULL OR (baseline_samples IS NOT NULL AND JSON_LENGTH(baseline_samples) > 0))
+       ORDER BY id DESC LIMIT 1`,
+      [userId]
+    );
+    if (completedRows.length > 0) {
+      return completedRows[0];
+    }
+
+    const [rows] = await pool.query(
+      `SELECT * FROM behavioral_analysis_sessions WHERE user_id = ? ORDER BY id DESC LIMIT 1`,
+      [userId]
+    );
+    return rows[0] || null;
+  },
+
   async saveBaseline(sessionId, samples, durationSeconds) {
     await pool.query(
       `UPDATE behavioral_analysis_sessions

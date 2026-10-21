@@ -145,12 +145,22 @@ GENERAL RULES:
       }
     }
 
-    // Default dynamic Question 1 if LLM completely offline
-    if (questionNumber === 1) {
-      return `${timeGreeting} ${candidateName}, welcome! Could you please introduce yourself and walk us through your professional background and interest in the ${jobRole} role at ${company || 'our company'}?`;
+    // Intelligent structured fallbacks per question stage if LLM is offline or timed out
+    const companyName = company || "our engineering team";
+    switch (questionNumber) {
+      case 1:
+        return `${timeGreeting} ${candidateName}, welcome! Could you please introduce yourself and walk us through your professional background and interest in the ${jobRole} role at ${companyName}?`;
+      case 2:
+        return `Looking at your experience, could you highlight a specific technical project or system you architected, and explain the key technologies you chose to solve that problem?`;
+      case 3:
+        return `Can you walk us through a complex technical challenge or difficult bug you encountered in production, and how you systematically diagnosed and resolved it?`;
+      case 4:
+        return `How do you approach code reviews, design disagreements, or collaborating with cross-functional team members when working under tight sprint deadlines?`;
+      case 5:
+        return `Looking ahead, what excites you most about contributing to ${companyName} as a ${jobRole}, and what technical areas are you eager to grow in?`;
+      default:
+        return `Could you share an example of how you maintain high code quality and scalability when building software for ${jobRole} positions?`;
     }
-
-    return `Could you share a specific technical project or accomplishment from your experience that best demonstrates your problem-solving skills as a ${jobRole}?`;
   },
 };
 

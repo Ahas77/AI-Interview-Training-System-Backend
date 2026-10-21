@@ -15,11 +15,17 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Static files
+const path = require("path");
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
 // Routes
 app.use("/api", authRoutes);
 app.use("/api/cv", cvRoutes);
 app.use("/api/interview", interviewRoutes);
 app.use("/api/behavioral-analysis", behavioralAnalysisRoutes);
+app.post("/api/log-devtools", (req, res) => res.status(200).json({ success: true }));
+app.post("/api/devtools/log", (req, res) => res.status(200).json({ success: true }));
 
 app.get("/", (req, res) => {
   res.json({
